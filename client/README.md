@@ -1,6 +1,6 @@
 # CARITAS SHOPPER POS
 
-A Next.js + TypeScript POS prototype. POS business data is in-memory for the current session; sign-in is verified by the Express API.
+A Next.js + TypeScript POS prototype. Inventory products, stock adjustments, and completed sales/invoices are stored through the Express API; other POS business data remains in-memory for the current session.
 
 ## Quick start (Windows / macOS / Linux)
 1. Install Node.js LTS (Node 20+ recommended).
@@ -24,6 +24,10 @@ A Next.js + TypeScript POS prototype. POS business data is in-memory for the cur
 
 5. Open http://localhost:3000
 
+To test barcode scanning with a phone camera, open the POS from a trusted HTTPS address reachable by the phone and allow camera access. Mobile browsers block camera access from plain HTTP LAN addresses. USB/Bluetooth keyboard-style scanners can scan directly into the barcode field.
+
+Run the automated barcode-camera checks from the `client` directory with `npm test`. The tests simulate camera access and a decoded barcode; use **Test webcam / scan barcode** in the product form to check a real webcam.
+
 ## Staff sign-in and accounts
 Set a private session secret in `server/.env`:
 
@@ -43,26 +47,25 @@ The password is entered interactively and stored as a scrypt hash. The same comm
 
 Administration accounts have a separate sidebar for Dashboard, Users, Organizations, Transactions, Financial Overview, Reports, Audit Logs, Settings, Notifications, and Profile. User Management can list, create, edit, and remove non-administrator staff accounts. Admins can update an account's email and role, or optionally reset its password (which invalidates that account's existing sessions). Only Administration can call these endpoints; administrator accounts are intentionally omitted from the staff table and managed separately. Organizations, Audit Logs, and Settings are currently informational placeholders.
 
-Accountant accounts have a dedicated sidebar for Dashboard, Chart of Accounts, Income, Expenses, Journal Entries, Invoices, Bank Reconciliation, Financial Statements, Reports, and Profile. Income and Invoices show read-only sales records from the current browser session. Chart of Accounts, Expenses, Journal Entries, Bank Reconciliation, and Financial Statements are placeholders until accounting data and backend support are added.
+Accountant accounts have a dedicated sidebar for Dashboard, Chart of Accounts, Income, Expenses, Journal Entries, Invoices, Bank Reconciliation, Financial Statements, Reports, and Profile. Income and Invoices show saved sales records. Chart of Accounts, Expenses, Journal Entries, Bank Reconciliation, and Financial Statements are placeholders until accounting data and backend support are added.
 
-DAF accounts have a dedicated sidebar for Dashboard, Financial Overview, Transaction Review, Approvals, Budgets, Financial Statements, Audit & Compliance, Cash Flow, Reports, Activity Logs, and Profile. Transaction Review shows current-session sales, and Approvals can approve or reject current-session requests. Decisions are not persisted; the other DAF modules that need budgets, payment records, or audit data are placeholders.
+DAF accounts have a dedicated sidebar for Dashboard, Financial Overview, Transaction Review, Approvals, Budgets, Financial Statements, Audit & Compliance, Cash Flow, Reports, Activity Logs, and Profile. Transaction Review shows saved sales, and Approvals can approve or reject saved stock requests. The other DAF modules that need budgets, payment records, or audit data are placeholders.
 
 ## Included prototype screens
 - Dashboard: role-specific Cashier, Accountant, DAF, and Administration overviews with role-relevant metrics and quick actions
-- Inventory: product table, search, product entry, and stock adjustment
-- Sales: date-filtered sales, sale entry, invoice actions, and totals
-- Discount: discount list and discount entry
-- Customer: searchable customer list with add, edit, and remove actions
-- Request: request list and request entry
+- Inventory: database-backed product table, search, product entry, and stock adjustment
+- Sales: saved sales, barcode/SKU checkout, customer name and phone, itemized invoices, and print actions
+- Discount: database-backed discount rules with add and remove actions
+- Customer: searchable database-backed customer list with add, edit, and remove actions
+- Request: database-backed stock requests with saved approval decisions
 - Reports: report-type selector
 - User Management (Administration only): list, add, search, edit, and remove staff accounts
 - Administration-only navigation: Organizations, Financial Overview, Notifications, and Profile
 
 ## Current limitations — important
-- POS data is not connected to the backend database and resets on page refresh.
 - Role-specific API permissions, tenant/branch isolation, and audit logging are not implemented.
 - Configure a private session secret and unique staff passwords before starting the server.
-- Mobile Money and card are labels only; no payment is initiated.
+- MTN MoMo checkout displays a QR that opens the phone dialer with the merchant USSD code and invoice amount. The encoded `%23` represents the final `#`; the displayed fallback code retains the literal `#`. Complete MTN's payment confirmation flow and have staff confirm receipt before saving the invoice. Payment is not verified automatically. Card and other payment methods are recorded as selections only.
 - No tax rules, refunds, voids, barcode device integration, or printer configuration.
 - No true offline queue or cross-device synchronization.
 - Demo receipts are not tax invoices and must not be used for real sales.

@@ -1,17 +1,28 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
+import CameraBarcodeScanner from "./CameraBarcodeScanner";
+import { buildMtnMomoPaymentPayload } from "./payment";
 
 type Screen = "Dashboard" | "Inventory" | "Sales" | "Discount" | "Customer" | "Request" | "Report" | "Users" | "Organizations" | "Transactions" | "Financial Overview" | "Audit Logs" | "Settings" | "Notifications" | "Profile" | "Chart of Accounts" | "Income" | "Expenses" | "Journal Entries" | "Invoices" | "Bank Reconciliation" | "Financial Statements" | "Transaction Review" | "Approvals" | "Budgets" | "Audit & Compliance" | "Cash Flow" | "Activity Logs";
 type Role = "cashier" | "accountant" | "daf" | "administration";
 type UserSession = { role: Role; name: string; email: string };
 type StaffRole = Exclude<Role, "administration">;
 type ManagedUser = { _id: string; email: string; role: StaffRole; createdAt: string };
-type Product = { id: number; code: string; name: string; barcode: string; purchase: number; margin: number; price: number; vat: number; category: string; origin: string; quantity: number };
-type Customer = { id: number; name: string; email: string; phone: string; tin: string; credit: number; address: string };
-type Discount = { id: number; customer: string; product: string; title: string; start: string; end: string };
-type Request = { id: number; date: string; status: string; items: string; operator: string };
-type Sale = { id: number; date: string; customer: string; total: number; items: number; credit: number };
+type Product = { id: string; code: string; name: string; barcode: string; purchase: number; margin: number; price: number; vat: number; category: string; origin: string; quantity: number };
+type InventoryApiProduct = { _id: string; sku: string; name: string; barcode?: string; category?: string; origin?: string; stockQty: number; sellingPrice: number; costPrice?: number };
+type Customer = { id: string; name: string; email: string; phone: string; tin: string; credit: number; address: string };
+type Discount = { id: string; customerId: string | null; customer: string; product: string; title: string; percent: number; start: string; end: string };
+type Request = { id: string; date: string; createdAt: string; status: string; items: string; operator: string };
+type CustomerApiDocument = { _id: string; name: string; email: string; phone: string; tin: string; credit: number; address: string };
+type DiscountApiDocument = { _id: string; customerId: string | null; customerName: string; product: string; title: string; percent?: number; start: string; end: string };
+type RequestApiDocument = { _id: string; createdAt: string; status: string; items: string; operator: string };
+type CustomerPayment = { id: string; createdAt: string; amount: number; paymentMethod: string; balanceBefore: number; balanceAfter: number; receivedBy: string };
+type CustomerPaymentApiDocument = { _id: string; createdAt: string; amount: number; paymentMethod: string; balanceBefore: number; balanceAfter: number; receivedBy: string };
+type SaleLineItem = { productId: string; sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; discountAmount?: number };
+type Sale = { id: number; receiptNumber: string; date: string; customer: string; customerPhone: string; paymentMethod: string; total: number; subtotal: number; discountTotal: number; amountPaid: number; paymentStatus: string; items: number; credit: number; lineItems: SaleLineItem[] };
+type SaleApiDocument = { _id: string; receiptNumber: string; createdAt: string; customerId?: string | null; customerName?: string; customerPhone?: string; paymentMethod: string; total: number; subtotal?: number; discountTotal?: number; amountPaid?: number; balanceDue?: number; paymentStatus?: string; items: SaleLineItem[] };
 type DashboardAction = (screen: Screen) => void;
 
 type NavigationItem = { label: string; screen: Screen | "Logout"; icon: string };
@@ -19,8 +30,8 @@ const navItems: NavigationItem[] = [
   { label: "Dashboard", screen: "Dashboard", icon: "⌂" },
   { label: "Inventory", screen: "Inventory", icon: "▤" },
   { label: "Sales", screen: "Sales", icon: "▧" },
-  { label: "Discount", screen: "Discount", icon: "%" },
   { label: "Customer", screen: "Customer", icon: "♙" },
+  { label: "Discount", screen: "Discount", icon: "%" },
   { label: "Request", screen: "Request", icon: "▣" },
   { label: "Report", screen: "Report", icon: "▥" },
   { label: "Logout", screen: "Logout", icon: "↪" },
@@ -64,12 +75,17 @@ const dafNavItems: NavigationItem[] = [
 ];
 
 const reportTypes = [
-  "Daily simple Sales", "Daily detailed sales", "Sales by product", "Sales by vendor", "Sales by Cashier",
-  "Detailed Sales by Cashier", "Date range sales", "Sales by category", "Purchase", "Purchase by product",
-  "Request", "Inventory", "Inventory by type", "Low level product", "Out of stock", "Credit sales",
-  "Balance sheet", "Balance sheet by category",
+  "Daily Sales Summary", "Detailed Sales", "Sales by Product", "Sales by Category",
+  "Stock Requests", "Inventory On Hand", "Low Stock", "Out of Stock",
 ];
+type ReportData = {
+  headers: string[];
+  rows: string[][];
+  metrics: { label: string; value: string; detail: string }[];
+  emptyMessage: string;
+};
 const apiBaseUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000").replace(/\/$/, "");
+const mtnMerchantCode = "1616913";
 const roleNames: Record<Role, string> = {
   cashier: "Cashier",
   accountant: "Accountant",
@@ -88,7 +104,7 @@ const screenSubtitles: Record<Screen, string> = {
   Discount: "Create and review active discount rules.",
   Customer: "Manage customer details and sales activity.",
   Request: "Review and submit stock requests.",
-  Report: "Choose a report for the selected shop.",
+  Report: "Preview and export sales, inventory, and request reports.",
   Users: "Manage staff accounts and assigned roles.",
   Organizations: "Organization management and account structure.",
   Transactions: "Review and manage sales transactions.",
@@ -113,6 +129,104 @@ const screenSubtitles: Record<Screen, string> = {
 };
 const money = (value: number) => `RWF ${Math.round(value).toLocaleString("en-US")}`;
 const today = () => new Date().toISOString().slice(0, 10);
+function toInventoryProduct(product: InventoryApiProduct): Product {
+  const purchase = product.costPrice || 0;
+  return {
+    id: product._id,
+    code: product.sku,
+    name: product.name,
+    barcode: product.barcode || "—",
+    purchase,
+    margin: purchase > 0 ? Math.round(((product.sellingPrice - purchase) / purchase) * 100) : 0,
+    price: product.sellingPrice,
+    vat: 0,
+    category: product.category || "General",
+    origin: product.origin || "Local",
+    quantity: product.stockQty,
+  };
+}
+async function fetchInventoryProducts(): Promise<Product[]> {
+  const response = await fetch(`${apiBaseUrl}/api/inventory`, { credentials: "include" });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.message || "Unable to load inventory.");
+  if (!Array.isArray(result.data)) throw new Error("The inventory response was invalid.");
+  return result.data.map(toInventoryProduct);
+}
+async function fetchBusinessData<T>(resource: string): Promise<T[]> {
+  const response = await fetch(`${apiBaseUrl}/api/${resource}`, { credentials: "include" });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.message || `Unable to load ${resource}.`);
+  if (!Array.isArray(result.data)) throw new Error(`The ${resource} response was invalid.`);
+  return result.data;
+}
+function toCustomer(document: CustomerApiDocument): Customer {
+  return {
+    id: document._id,
+    name: document.name,
+    email: document.email || "",
+    phone: document.phone || "",
+    tin: document.tin || "",
+    credit: document.credit || 0,
+    address: document.address || "",
+  };
+}
+function toDiscount(document: DiscountApiDocument): Discount {
+  return {
+    id: document._id,
+    customerId: document.customerId,
+    customer: document.customerName,
+    product: document.product,
+    title: document.title,
+    percent: document.percent || 0,
+    start: document.start,
+    end: document.end,
+  };
+}
+function discountProductMatches(discount: Discount, product: Product) {
+  const target = discount.product.trim().toLowerCase();
+  return target === "all products" || target === product.code.toLowerCase() || target === product.name.toLowerCase();
+}
+function toCustomerPayment(document: CustomerPaymentApiDocument): CustomerPayment {
+  return {
+    id: document._id,
+    createdAt: document.createdAt,
+    amount: document.amount,
+    paymentMethod: document.paymentMethod,
+    balanceBefore: document.balanceBefore,
+    balanceAfter: document.balanceAfter,
+    receivedBy: document.receivedBy,
+  };
+}
+function toRequest(document: RequestApiDocument): Request {
+  const createdAt = new Date(document.createdAt);
+  return {
+    id: document._id,
+    date: Number.isNaN(createdAt.getTime()) ? today() : createdAt.toISOString().slice(0, 10),
+    createdAt: document.createdAt,
+    status: document.status,
+    items: document.items,
+    operator: document.operator,
+  };
+}
+function toSale(document: SaleApiDocument): Sale {
+  const createdAt = new Date(document.createdAt);
+  return {
+    id: createdAt.getTime(),
+    receiptNumber: document.receiptNumber,
+    date: Number.isNaN(createdAt.getTime()) ? today() : createdAt.toISOString().slice(0, 10),
+    customer: document.customerName || "Walk-in customer",
+    customerPhone: document.customerPhone || "",
+    paymentMethod: document.paymentMethod,
+    total: document.total,
+    subtotal: document.subtotal ?? document.total,
+    discountTotal: document.discountTotal || 0,
+    amountPaid: document.amountPaid ?? document.total,
+    paymentStatus: document.paymentStatus || "paid",
+    items: document.items.reduce((count, item) => count + item.quantity, 0),
+    credit: document.balanceDue || 0,
+    lineItems: document.items,
+  };
+}
 function isStaffRole(value: string): value is StaffRole {
   return Object.hasOwn(staffRoleNames, value);
 }
@@ -133,21 +247,38 @@ export default function Home() {
   const [userFormError, setUserFormError] = useState("");
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [inventorySaving, setInventorySaving] = useState(false);
+  const [inventoryError, setInventoryError] = useState("");
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [discounts, setDiscounts] = useState<Discount[]>([]);
   const [requests, setRequests] = useState<Request[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
-  const [modal, setModal] = useState<"product" | "adjust" | "customer" | "discount" | "request" | "sale" | "invoice" | "user" | null>(null);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [saleSaving, setSaleSaving] = useState(false);
+  const [businessSaving, setBusinessSaving] = useState(false);
+  const [saleError, setSaleError] = useState("");
+  const [paymentQrOpen, setPaymentQrOpen] = useState(false);
+  const [printSale, setPrintSale] = useState<Sale | null>(null);
+  const [modal, setModal] = useState<"product" | "adjust" | "customer" | "discount" | "request" | "sale" | "credit-payment" | "invoice" | "user" | null>(null);
   const [message, setMessage] = useState("");
   const [productQuery, setProductQuery] = useState("");
   const [customerQuery, setCustomerQuery] = useState("");
   const [reportType, setReportType] = useState("");
+  const [reportStartDate, setReportStartDate] = useState(today());
+  const [reportEndDate, setReportEndDate] = useState(today());
+  const [requestStatusFilter, setRequestStatusFilter] = useState("All statuses");
   const [saleDate, setSaleDate] = useState(today());
-  const [cart, setCart] = useState<Record<number, number>>({});
+  const [cart, setCart] = useState<Record<string, number>>({});
+  const saleRequestId = useRef<string | null>(null);
+  const creditPaymentRequestId = useRef<string | null>(null);
+  const [customerPayments, setCustomerPayments] = useState<CustomerPayment[]>([]);
+  const [paymentHistoryLoading, setPaymentHistoryLoading] = useState(false);
+  const [creditPaymentError, setCreditPaymentError] = useState("");
   const [form, setForm] = useState<Record<string, string>>({});
-  const [editingProduct, setEditingProduct] = useState<number | null>(null);
-  const [editingCustomer, setEditingCustomer] = useState<number | null>(null);
-  const [selectedCustomer, setSelectedCustomer] = useState<number | null>(null);
+  const [editingProduct, setEditingProduct] = useState<string | null>(null);
+  const [editingCustomer, setEditingCustomer] = useState<string | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -190,6 +321,86 @@ export default function Home() {
       });
     return () => { active = false; };
   }, [session?.role, usersRefreshKey]);
+
+  useEffect(() => {
+    if (!session) {
+      setProducts([]);
+      setSales([]);
+      setCustomers([]);
+      setDiscounts([]);
+      setRequests([]);
+      setInventoryError("");
+      setInventoryLoading(false);
+      setSalesLoading(false);
+      return;
+    }
+
+    let active = true;
+    setInventoryLoading(true);
+    setInventoryError("");
+    setProducts([]);
+    fetchInventoryProducts()
+      .then(data => {
+        if (active) setProducts(data);
+      })
+      .catch(error => {
+        if (active) setInventoryError(error instanceof Error ? error.message : "Unable to load inventory.");
+      })
+      .finally(() => {
+        if (active) setInventoryLoading(false);
+      });
+    return () => { active = false; };
+  }, [session?.email]);
+
+  useEffect(() => {
+    if (!session) return;
+
+    let active = true;
+    Promise.all([
+      fetchBusinessData<CustomerApiDocument>("customers"),
+      fetchBusinessData<DiscountApiDocument>("discounts"),
+      fetchBusinessData<RequestApiDocument>("requests"),
+    ])
+      .then(([customerData, discountData, requestData]) => {
+        if (!active) return;
+        setCustomers(customerData.map(toCustomer));
+        setDiscounts(discountData.map(toDiscount));
+        setRequests(requestData.map(toRequest));
+      })
+      .catch(error => {
+        if (active) setMessage(error instanceof Error ? error.message : "Unable to load customer, discount, and request data.");
+      });
+    return () => { active = false; };
+  }, [session?.email]);
+
+  useEffect(() => {
+    if (!session) return;
+
+    let active = true;
+    setSalesLoading(true);
+    fetch(`${apiBaseUrl}/api/sales?limit=100`, { credentials: "include" })
+      .then(async response => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || "Unable to load invoices.");
+        if (!Array.isArray(result.data)) throw new Error("The invoice response was invalid.");
+        if (active) setSales(result.data.map(toSale));
+      })
+      .catch(error => {
+        if (active) setMessage(error instanceof Error ? error.message : "Unable to load invoices.");
+      })
+      .finally(() => {
+        if (active) setSalesLoading(false);
+      });
+    return () => { active = false; };
+  }, [session?.email]);
+
+  useEffect(() => {
+    if (!printSale) return;
+    const clearPrintSale = () => setPrintSale(null);
+    window.addEventListener("afterprint", clearPrintSale, { once: true });
+    window.print();
+    return () => window.removeEventListener("afterprint", clearPrintSale);
+  }, [printSale]);
 
   async function signIn(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -316,6 +527,24 @@ export default function Home() {
   const unitsInStock = products.reduce((sum, product) => sum + product.quantity, 0);
   const inventoryCostValue = products.reduce((sum, product) => sum + product.purchase * product.quantity, 0);
   const cartTotal = products.reduce((sum, product) => sum + product.price * (cart[product.id] || 0), 0);
+  const activeSaleDiscounts = discounts.filter(discount =>
+    discount.percent > 0 &&
+    discount.start <= today() &&
+    discount.end >= today() &&
+    (!discount.customerId || discount.customerId === form.customerId) &&
+    products.some(product => (cart[product.id] || 0) > 0 && discountProductMatches(discount, product))
+  );
+  const selectedSaleDiscount = activeSaleDiscounts.find(discount => discount.id === form.discountId);
+  const saleDiscountTotal = selectedSaleDiscount
+    ? Number(products.reduce((total, product) => {
+        const quantity = cart[product.id] || 0;
+        if (!quantity || !discountProductMatches(selectedSaleDiscount, product)) return total;
+        const lineTotal = Number((product.price * quantity).toFixed(2));
+        return total + Number((lineTotal * selectedSaleDiscount.percent / 100).toFixed(2));
+      }, 0).toFixed(2))
+    : 0;
+  const saleTotal = Number((cartTotal - saleDiscountTotal).toFixed(2));
+  const mtnPayment = buildMtnMomoPaymentPayload(saleTotal, mtnMerchantCode);
   const todaysSales = sales.filter(sale => sale.date === today());
   const todaysRevenue = todaysSales.reduce((sum, sale) => sum + sale.total, 0);
   const pendingRequests = requests.filter(request => request.status === "Pending").length;
@@ -324,7 +553,155 @@ export default function Home() {
   const selectedDateCredit = selectedDateSales.reduce((sum, sale) => sum + sale.credit, 0);
   const averageSale = selectedDateSales.length ? selectedDateRevenue / selectedDateSales.length : 0;
   const recentSales = [...sales].sort((left, right) => right.id - left.id).slice(0, 5);
-  const recentRequests = [...requests].sort((left, right) => right.id - left.id).slice(0, 5);
+  const recentRequests = [...requests].sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt)
+  ).slice(0, 5);
+  const reportUsesDateRange = [
+    "Daily Sales Summary", "Detailed Sales", "Sales by Product", "Sales by Category", "Stock Requests",
+  ].includes(reportType);
+  const reportDateRangeInvalid = reportUsesDateRange && reportStartDate > reportEndDate;
+  const reportData = useMemo<ReportData | null>(() => {
+    if (!reportType) return null;
+
+    const rangedSales = sales.filter(sale => sale.date >= reportStartDate && sale.date <= reportEndDate);
+    const rangedRequests = requests.filter(request => request.date >= reportStartDate && request.date <= reportEndDate);
+    const unitsSold = rangedSales.reduce(
+      (total, sale) => total + sale.lineItems.reduce((lineTotal, item) => lineTotal + item.quantity, 0),
+      0
+    );
+    const revenue = rangedSales.reduce((total, sale) => total + sale.total, 0);
+    const salesMetrics = [
+      { label: "Transactions", value: String(rangedSales.length), detail: "Completed invoices in range" },
+      { label: "Units sold", value: unitsSold.toLocaleString("en-US"), detail: "Items across all invoices" },
+      { label: "Sales total", value: money(revenue), detail: "Recorded invoice value" },
+    ];
+
+    if (reportType === "Daily Sales Summary") {
+      const byDate = new Map<string, { transactions: number; units: number; revenue: number }>();
+      rangedSales.forEach(sale => {
+        const totals = byDate.get(sale.date) || { transactions: 0, units: 0, revenue: 0 };
+        totals.transactions += 1;
+        totals.units += sale.items;
+        totals.revenue += sale.total;
+        byDate.set(sale.date, totals);
+      });
+      return {
+        headers: ["DATE", "TRANSACTIONS", "UNITS SOLD", "REVENUE"],
+        rows: [...byDate.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([date, totals]) => [
+          date, String(totals.transactions), String(totals.units), money(totals.revenue),
+        ]),
+        metrics: salesMetrics,
+        emptyMessage: "No sales were recorded in this date range.",
+      };
+    }
+
+    if (reportType === "Detailed Sales") {
+      return {
+        headers: ["DATE", "INVOICE", "CUSTOMER", "PRODUCT", "SKU", "QTY", "UNIT PRICE", "LINE TOTAL"],
+        rows: rangedSales.flatMap(sale => sale.lineItems.map(item => [
+          sale.date, sale.receiptNumber, sale.customer, item.name, item.sku,
+          String(item.quantity), money(item.unitPrice), money(item.lineTotal),
+        ])),
+        metrics: salesMetrics,
+        emptyMessage: "No sale line items were recorded in this date range.",
+      };
+    }
+
+    if (reportType === "Sales by Product") {
+      const byProduct = new Map<string, { name: string; sku: string; quantity: number; revenue: number }>();
+      rangedSales.forEach(sale => sale.lineItems.forEach(item => {
+        const totals = byProduct.get(item.productId) || {
+          name: item.name, sku: item.sku, quantity: 0, revenue: 0,
+        };
+        totals.quantity += item.quantity;
+        totals.revenue += item.lineTotal;
+        byProduct.set(item.productId, totals);
+      }));
+      const rows = [...byProduct.values()]
+        .sort((left, right) => right.revenue - left.revenue)
+        .map(item => [item.sku, item.name, String(item.quantity), money(item.revenue)]);
+      return {
+        headers: ["SKU", "PRODUCT", "UNITS SOLD", "REVENUE"],
+        rows,
+        metrics: [
+          { label: "Products sold", value: String(rows.length), detail: "Unique products in sales" },
+          { label: "Units sold", value: unitsSold.toLocaleString("en-US"), detail: "Items across all invoices" },
+          { label: "Sales total", value: money(revenue), detail: "Recorded invoice value" },
+        ],
+        emptyMessage: "No products were sold in this date range.",
+      };
+    }
+
+    if (reportType === "Sales by Category") {
+      const categories = new Map(products.map(product => [product.id, product.category]));
+      const byCategory = new Map<string, { quantity: number; revenue: number }>();
+      rangedSales.forEach(sale => sale.lineItems.forEach(item => {
+        const category = categories.get(item.productId) || "Uncategorized";
+        const totals = byCategory.get(category) || { quantity: 0, revenue: 0 };
+        totals.quantity += item.quantity;
+        totals.revenue += item.lineTotal;
+        byCategory.set(category, totals);
+      }));
+      const rows = [...byCategory.entries()]
+        .sort(([, left], [, right]) => right.revenue - left.revenue)
+        .map(([category, totals]) => [category, String(totals.quantity), money(totals.revenue)]);
+      return {
+        headers: ["CATEGORY", "UNITS SOLD", "REVENUE"],
+        rows,
+        metrics: [
+          { label: "Categories", value: String(rows.length), detail: "Categories represented in sales" },
+          { label: "Units sold", value: unitsSold.toLocaleString("en-US"), detail: "Items across all invoices" },
+          { label: "Sales total", value: money(revenue), detail: "Recorded invoice value" },
+        ],
+        emptyMessage: "No category sales were recorded in this date range.",
+      };
+    }
+
+    if (reportType === "Stock Requests") {
+      const pending = rangedRequests.filter(request => request.status === "Pending").length;
+      const approved = rangedRequests.filter(request => request.status === "Approved").length;
+      return {
+        headers: ["DATE", "STATUS", "ITEMS REQUESTED", "OPERATOR"],
+        rows: rangedRequests.map(request => [request.date, request.status, request.items, request.operator]),
+        metrics: [
+          { label: "Requests", value: String(rangedRequests.length), detail: "Submitted in date range" },
+          { label: "Pending", value: String(pending), detail: "Awaiting review" },
+          { label: "Approved", value: String(approved), detail: "Approved requests" },
+        ],
+        emptyMessage: "No stock requests were submitted in this date range.",
+      };
+    }
+
+    const inventoryRows = reportType === "Low Stock"
+      ? products.filter(product => product.quantity > 0 && product.quantity <= 5)
+      : reportType === "Out of Stock"
+        ? products.filter(product => product.quantity === 0)
+        : [...products];
+    const totalUnits = inventoryRows.reduce((total, product) => total + product.quantity, 0);
+    const stockAtCost = inventoryRows.reduce((total, product) => total + product.purchase * product.quantity, 0);
+    return {
+      headers: ["SKU", "PRODUCT", "CATEGORY", "ON HAND", "UNIT PRICE", "STOCK AT COST"],
+      rows: inventoryRows
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map(product => [
+          product.code, product.name, product.category, String(product.quantity),
+          money(product.price), money(product.purchase * product.quantity),
+        ]),
+      metrics: [
+        { label: "Products", value: String(inventoryRows.length), detail: "Matching inventory items" },
+        { label: "Units on hand", value: totalUnits.toLocaleString("en-US"), detail: "Available stock quantity" },
+        { label: "Stock at cost", value: money(stockAtCost), detail: "Purchase cost × quantity" },
+      ],
+      emptyMessage: reportType === "Low Stock"
+        ? "No products are currently low on stock."
+        : reportType === "Out of Stock"
+          ? "No products are currently out of stock."
+          : "No inventory products are available.",
+    };
+  }, [products, reportEndDate, reportStartDate, reportType, requests, sales]);
+  const filteredRequests = requests.filter(request =>
+    requestStatusFilter === "All statuses" || request.status === requestStatusFilter
+  );
   const dashboardSubtitle = session?.role === "cashier"
     ? "Checkout, recent transactions, and stock alerts."
     : session?.role === "accountant"
@@ -349,12 +726,16 @@ export default function Home() {
   }
 
   function openModal(kind: typeof modal, values: Record<string, string> = {}) {
-    setForm(values);
+    setForm(kind === "sale" ? { paymentMethod: "mobile_money", ...values } : values);
+    if (kind === "sale") {
+      setSaleError("");
+      setPaymentQrOpen(false);
+    }
     if (kind === "user") {
       setUserFormError("");
       setEditingUserId(null);
     }
-    setEditingProduct(kind === "adjust" && values.id ? Number(values.id) : null);
+    setEditingProduct(kind === "adjust" && values.id ? values.id : null);
     if (kind === "customer") setEditingCustomer(null);
     setModal(kind);
     setMessage("");
@@ -369,80 +750,454 @@ export default function Home() {
     setModal("user");
   }
 
-  function saveProduct() {
+  async function saveProduct() {
     const name = form.name?.trim() || "";
     const code = form.code?.trim() || "";
     const quantity = Number(form.quantity);
     const price = Number(form.price);
-    if (!name || !code || !Number.isInteger(quantity) || quantity < 0 || !Number.isFinite(price) || price < 0) {
+    const purchase = form.purchase ? Number(form.purchase) : 0;
+    if (!name || !code || !form.quantity?.trim() || !form.price?.trim() || !Number.isSafeInteger(quantity) || quantity < 0 || !Number.isFinite(price) || price < 0 || !Number.isFinite(purchase) || purchase < 0) {
       setMessage("Enter a product code, name, valid price and quantity.");
       return;
     }
-    if (editingProduct !== null) {
-      setProducts(current => current.map(item => item.id === editingProduct
-        ? { ...item, quantity, price, purchase: Number(form.purchase) || item.purchase }
-        : item));
-      setMessage("Stock adjustment saved.");
-    } else {
-      setProducts(current => [...current, {
-        id: Date.now(), code, name, barcode: form.barcode || "—", purchase: Number(form.purchase) || 0,
-        margin: Number(form.margin) || 0, price, vat: Number(form.vat) || 0,
-        category: form.category || "General", origin: form.origin || "Local", quantity,
-      }]);
-      setMessage("Product added.");
+    setInventoryError("");
+    setInventorySaving(true);
+    try {
+      if (editingProduct !== null) {
+        const product = products.find(item => item.id === editingProduct);
+        if (!product) throw new Error("Select a valid product to adjust.");
+        const change = quantity - product.quantity;
+        if (change === 0) {
+          setModal(null);
+          setMessage("Stock quantity is unchanged.");
+          return;
+        }
+        const response = await fetch(`${apiBaseUrl}/api/inventory/adjust`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            productId: editingProduct,
+            change,
+            reason: "correction",
+            note: "Inventory screen adjustment",
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || "Unable to adjust stock.");
+        setProducts(current => current.map(item => item.id === editingProduct
+          ? { ...item, quantity: result.data.stockAfter }
+          : item));
+        setMessage("Stock adjustment saved.");
+      } else {
+        const response = await fetch(`${apiBaseUrl}/api/products`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sku: code,
+            name,
+            barcode: form.barcode?.trim() || "",
+            category: form.category?.trim() || "General",
+            origin: form.origin?.trim() || "Local",
+            sellingPrice: price,
+            costPrice: purchase,
+            stockQty: quantity,
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || "Unable to save product.");
+        setProducts(current => [...current, toInventoryProduct(result.data)].sort((a, b) => a.name.localeCompare(b.name)));
+        setMessage("Product added.");
+      }
+      setModal(null);
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : "Unable to save inventory changes.");
+    } finally {
+      setInventorySaving(false);
     }
-    setModal(null);
   }
 
-  function saveCustomer() {
+  async function saveCustomer() {
     if (!form.name?.trim()) { setMessage("Enter a customer name."); return; }
-    const customer = {
-      id: Date.now(), name: form.name.trim(), email: form.email || "—", phone: form.phone || "—",
-      tin: form.tin || "—", credit: Number(form.credit) || 0, address: form.address || "—",
-    };
-    if (editingCustomer !== null) {
-      setCustomers(current => current.map(item => item.id === editingCustomer ? { ...customer, id: editingCustomer } : item));
-      setMessage("Customer updated.");
-    } else {
-      setCustomers(current => [...current, customer]);
-      setMessage("Customer added.");
+    setBusinessSaving(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/customers${editingCustomer ? `/${encodeURIComponent(editingCustomer)}` : ""}`, {
+        method: editingCustomer ? "PATCH" : "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name.trim(),
+          email: form.email?.trim() || "",
+          phone: form.phone?.trim() || "",
+          tin: form.tin?.trim() || "",
+          credit: Number(form.credit) || 0,
+          address: form.address?.trim() || "",
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Unable to save customer.");
+      const customer = toCustomer(result.data);
+      setCustomers(current => editingCustomer
+        ? current.map(item => item.id === editingCustomer ? customer : item)
+        : [...current, customer]);
+      setEditingCustomer(null);
+      setModal(null);
+      setMessage(`Customer ${editingCustomer ? "updated" : "added"}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save customer.");
+    } finally {
+      setBusinessSaving(false);
     }
-    setEditingCustomer(null);
-    setModal(null);
   }
 
-  function saveDiscount() {
+  async function saveDiscount() {
     if (!form.title?.trim()) { setMessage("Enter a discount title."); return; }
-    setDiscounts(current => [...current, {
-      id: Date.now(), customer: form.customer || "All customers", product: form.product || "All products",
-      title: form.title.trim(), start: form.start || today(), end: form.end || today(),
-    }]);
-    setModal(null);
-    setMessage("Discount added.");
+    const percent = Number(form.percent);
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+      setMessage("Enter a discount percentage greater than 0 and no more than 100.");
+      return;
+    }
+    const customer = form.customerId
+      ? customers.find(item => item.id === form.customerId)
+      : undefined;
+    if (form.customerId && !customer) {
+      setMessage("Select a customer from the customer list.");
+      return;
+    }
+    setBusinessSaving(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/discounts`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerId: customer?.id || null,
+          product: form.product?.trim() || "All products",
+          title: form.title.trim(),
+          percent,
+          start: form.start || today(),
+          end: form.end || today(),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Unable to save discount.");
+      setDiscounts(current => [toDiscount(result.data), ...current]);
+      setModal(null);
+      setMessage("Discount added.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save discount.");
+    } finally {
+      setBusinessSaving(false);
+    }
   }
 
-  function saveRequest() {
+  async function saveRequest() {
     if (!form.items?.trim()) { setMessage("Enter the requested items."); return; }
-    setRequests(current => [...current, {
-      id: Date.now(), date: today(), status: "Pending", items: form.items.trim(), operator: session?.name || "Staff",
-    }]);
-    setModal(null);
-    setMessage("Request added.");
+    setBusinessSaving(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/requests`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: form.items.trim() }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Unable to save request.");
+      setRequests(current => [toRequest(result.data), ...current]);
+      setModal(null);
+      setMessage("Request added.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save request.");
+    } finally {
+      setBusinessSaving(false);
+    }
   }
 
-  function finishSale() {
+  function selectSaleCustomer(customerId: string) {
+    const customer = customers.find(item => item.id === customerId);
+    setForm(current => ({
+      ...current,
+      customerId: customer?.id || "",
+      customerName: customer?.name || "",
+      customerPhone: customer?.phone || "",
+      discountId: "",
+    }));
+  }
+
+  async function openCreditPayment(customer: Customer) {
+    setForm({ customerId: customer.id, amount: "", paymentMethod: "cash" });
+    setCustomerPayments([]);
+    setCreditPaymentError("");
+    setPaymentHistoryLoading(true);
+    setModal("credit-payment");
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/customers/${encodeURIComponent(customer.id)}/payments`, {
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Unable to load payment history.");
+      if (!Array.isArray(result.data)) throw new Error("The payment history response was invalid.");
+      setCustomerPayments(result.data.map(toCustomerPayment));
+    } catch (error) {
+      setCreditPaymentError(error instanceof Error ? error.message : "Unable to load payment history.");
+    } finally {
+      setPaymentHistoryLoading(false);
+    }
+  }
+
+  async function saveCreditPayment() {
+    const customer = customers.find(item => item.id === form.customerId);
+    const amount = Number(form.amount);
+    if (!customer) { setCreditPaymentError("Select a valid customer to record a payment."); return; }
+    if (!Number.isFinite(amount) || amount <= 0 || amount > customer.credit) {
+      setCreditPaymentError("Enter a payment greater than zero and no more than the outstanding credit.");
+      return;
+    }
+
+    setBusinessSaving(true);
+    setCreditPaymentError("");
+    try {
+      const requestId = creditPaymentRequestId.current || globalThis.crypto.randomUUID();
+      creditPaymentRequestId.current = requestId;
+      const response = await fetch(`${apiBaseUrl}/api/customers/${encodeURIComponent(customer.id)}/payments`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientRequestId: requestId,
+          amount,
+          paymentMethod: form.paymentMethod || "cash",
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Unable to record credit payment.");
+      if (!result.data?.customer || !result.data?.payment) {
+        throw new Error("The server did not return the saved credit payment.");
+      }
+
+      const updatedCustomer = toCustomer(result.data.customer);
+      setCustomers(current => current.map(item => item.id === updatedCustomer.id ? updatedCustomer : item));
+      const savedPayment = toCustomerPayment(result.data.payment);
+      setCustomerPayments(current => [savedPayment, ...current.filter(item => item.id !== savedPayment.id)]);
+      if (Array.isArray(result.data.updatedSales)) {
+        const updatedSales = new Map<string, Sale>(
+          result.data.updatedSales.map((sale: SaleApiDocument) => {
+            const mappedSale = toSale(sale);
+            return [mappedSale.receiptNumber, mappedSale];
+          })
+        );
+        setSales(current => current.map(sale => updatedSales.get(sale.receiptNumber) || sale));
+      }
+      creditPaymentRequestId.current = null;
+      setForm(current => ({ ...current, amount: "" }));
+      setMessage(`Payment of ${money(savedPayment.amount)} recorded. Remaining credit: ${money(updatedCustomer.credit)}.`);
+    } catch (error) {
+      setCreditPaymentError(error instanceof Error ? error.message : "Unable to record credit payment.");
+    } finally {
+      setBusinessSaving(false);
+    }
+  }
+
+  async function removeCustomer() {
+    if (!selectedCustomer) return;
+    setBusinessSaving(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/customers/${encodeURIComponent(selectedCustomer)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Unable to remove customer.");
+      setCustomers(current => current.filter(item => item.id !== selectedCustomer));
+      setSelectedCustomer(null);
+      setMessage(result.message || "Customer removed.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to remove customer.");
+    } finally {
+      setBusinessSaving(false);
+    }
+  }
+
+  async function removeDiscount(discountId: string) {
+    setBusinessSaving(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/discounts/${encodeURIComponent(discountId)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Unable to remove discount.");
+      setDiscounts(current => current.filter(item => item.id !== discountId));
+      setMessage(result.message || "Discount removed.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to remove discount.");
+    } finally {
+      setBusinessSaving(false);
+    }
+  }
+
+  async function decideRequest(requestId: string, status: "Approved" | "Rejected") {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/requests/${encodeURIComponent(requestId)}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Unable to update request.");
+      const updatedRequest = toRequest(result.data);
+      setRequests(current => current.map(request => request.id === requestId ? updatedRequest : request));
+      setMessage(`Request ${status.toLowerCase()}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update request.");
+    }
+  }
+
+  function exportReportCsv() {
+    if (!reportData || reportData.rows.length === 0) return;
+    const escapeCell = (value: string) => {
+      const safeValue = /^[=+\-@]/.test(value.trim()) ? `'${value}` : value;
+      return `"${safeValue.replaceAll('"', '""')}"`;
+    };
+    const csv = [reportData.headers, ...reportData.rows]
+      .map(row => row.map(escapeCell).join(","))
+      .join("\r\n");
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const reportSlug = reportType.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    link.href = url;
+    link.download = `${reportSlug}-${reportStartDate}-to-${reportEndDate}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function addSaleProductByCode(value: string) {
+    const code = value.trim().toLowerCase();
+    if (!code) return;
+    const product = products.find(item =>
+      item.code.toLowerCase() === code || item.barcode.trim().toLowerCase() === code
+    );
+    if (!product) {
+      setSaleError(`No product found for code or barcode "${value.trim()}".`);
+      return;
+    }
+
+    const quantity = cart[product.id] || 0;
+    if (quantity >= product.quantity) {
+      setSaleError(`${product.name} has no more stock available.`);
+      return;
+    }
+
+    setCart(current => ({ ...current, [product.id]: (current[product.id] || 0) + 1 }));
+    setForm(current => ({ ...current, productCode: "" }));
+    setSaleError("");
+  }
+
+  function showMtnPaymentQr() {
     const itemCount = Object.values(cart).reduce((sum, quantity) => sum + quantity, 0);
-    if (!itemCount) { setMessage("Add at least one product to the sale."); return; }
-    setSales(current => [...current, {
-      id: Date.now(), date: saleDate, customer: form.customer || "Walk-in customer",
-      total: cartTotal, items: itemCount, credit: 0,
-    }]);
-    setProducts(current => current.map(product => ({
-      ...product, quantity: Math.max(0, product.quantity - (cart[product.id] || 0)),
-    })));
-    setCart({});
-    setModal(null);
-    setMessage("Sale completed.");
+    if (!itemCount) { setSaleError("Add at least one product before requesting payment."); return; }
+    if (saleTotal <= 0) { setSaleError("The invoice total must be greater than zero to request payment."); return; }
+    if (form.creditSale === "true" && !customers.some(customer => customer.id === form.customerId)) {
+      setSaleError("Select a saved customer for this credit sale.");
+      return;
+    }
+    if (!form.customerName?.trim()) { setSaleError("Enter the customer name before requesting payment."); return; }
+    if (!/^[+()\d\s-]{7,30}$/.test(form.customerPhone?.trim() || "")) {
+      setSaleError("Enter a valid customer phone number before requesting payment.");
+      return;
+    }
+    setSaleError("");
+    setPaymentQrOpen(true);
+  }
+
+  async function finishSale() {
+    const itemCount = Object.values(cart).reduce((sum, quantity) => sum + quantity, 0);
+    const isCreditSale = form.creditSale === "true";
+    const selectedSaleCustomer = form.customerId
+      ? customers.find(customer => customer.id === form.customerId)
+      : undefined;
+    const customerName = selectedSaleCustomer?.name.trim() || form.customerName?.trim() || "";
+    const customerPhone = form.customerPhone?.trim() || "";
+    const paymentMethod = isCreditSale ? "credit" : form.paymentMethod || "cash";
+    if (!itemCount) { setSaleError("Add at least one product to the invoice."); return; }
+    if ((isCreditSale || form.customerId) && !selectedSaleCustomer) {
+      setSaleError("Select a valid saved customer.");
+      return;
+    }
+    if (form.discountId && !selectedSaleDiscount) {
+      setSaleError("The selected discount is no longer active or does not match this sale.");
+      return;
+    }
+    if (!customerName) { setSaleError("Enter the customer name."); return; }
+    if (
+      (!isCreditSale || paymentMethod === "mobile_money" || customerPhone) &&
+      !/^[+()\d\s-]{7,30}$/.test(customerPhone)
+    ) {
+      setSaleError("Enter a valid customer phone number.");
+      return;
+    }
+
+    setSaleSaving(true);
+    setSaleError("");
+    try {
+      const requestId = saleRequestId.current || globalThis.crypto.randomUUID();
+      saleRequestId.current = requestId;
+      const response = await fetch(`${apiBaseUrl}/api/sales`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientRequestId: requestId,
+          saleType: isCreditSale ? "credit" : "paid",
+          customerId: selectedSaleCustomer?.id || null,
+          customerName,
+          customerPhone,
+          discountId: selectedSaleDiscount?.id || null,
+          paymentMethod,
+          items: Object.entries(cart)
+            .filter(([, quantity]) => quantity > 0)
+            .map(([productId, quantity]) => ({ productId, quantity })),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || "Unable to save the sale.");
+      if (!result.data) throw new Error("The server did not return the saved invoice.");
+
+      const savedSale = toSale(result.data);
+      setSales(current => [savedSale, ...current.filter(sale => sale.receiptNumber !== savedSale.receiptNumber)]);
+      if (isCreditSale && selectedSaleCustomer) {
+        setCustomers(current => current.map(customer => customer.id === selectedSaleCustomer.id
+          ? { ...customer, credit: Number((customer.credit + savedSale.credit).toFixed(2)) }
+          : customer));
+      }
+      setCart({});
+      setForm({});
+      setModal(null);
+      setSaleError("");
+      setMessage(`${isCreditSale ? "Credit sale" : "Invoice"} ${savedSale.receiptNumber} saved. Opening print dialog…`);
+      saleRequestId.current = null;
+      setPrintSale(savedSale);
+
+      try {
+        setProducts(await fetchInventoryProducts());
+      } catch (error) {
+        setInventoryError(error instanceof Error ? error.message : "Sale saved, but inventory could not be refreshed.");
+      }
+    } catch (error) {
+      setSaleError(error instanceof Error ? error.message : "Unable to save the sale. Please try again.");
+    } finally {
+      setSaleSaving(false);
+    }
+  }
+
+  function printInvoice(sale: Sale) {
+    setPrintSale(sale);
   }
 
   function setField(key: string, value: string) {
@@ -506,7 +1261,7 @@ export default function Home() {
                 <span>Sales today</span><strong>{money(todaysRevenue)}</strong><small>{todaysSales.length} completed in this session</small>
               </section>
               <section className="admin-stat-card">
-                <span>Pending requests</span><strong>{pendingRequests}</strong><small>Awaiting review in this session</small>
+                <span>Pending requests</span><strong>{pendingRequests}</strong><small>Awaiting review</small>
               </section>
             </div>
 
@@ -625,8 +1380,11 @@ export default function Home() {
               }}>Adjust stock</button>
               <button className="button button-blue" onClick={() => openModal("product")}>＋ ADD</button>
             </div>
+            {inventoryError && <p className="inventory-error" role="alert">{inventoryError}</p>}
             <p className="hint">Double click on barcode column to copy</p>
             <Table headers={["CODE", "NAME", "BARCODE", "PURCHASE C...", "MARGIN %", "SALE PRICE", "VAT", "CATEGORY", "ORIGIN", "QUANTITY"]}>
+              {inventoryLoading && <tr><td colSpan={10}>Loading inventory…</td></tr>}
+              {!inventoryLoading && !inventoryError && filteredProducts.length === 0 && <tr><td colSpan={10}>{products.length ? "No products match your search." : "No products in inventory yet."}</td></tr>}
               {filteredProducts.map(product => <tr key={product.id}>
                 <td>{product.code}</td><td>{product.name}</td><td>{product.barcode}</td><td>{money(product.purchase)}</td>
                 <td>{product.margin}%</td><td>{money(product.price)}</td><td>{product.vat}%</td><td>{product.category}</td><td>{product.origin}</td><td>{product.quantity}</td>
@@ -640,13 +1398,16 @@ export default function Home() {
               <span className="section-label">{screen === "Transactions" ? "Transactions" : "Sales"}</span>
               <input aria-label="Sales date" type="date" value={saleDate} onChange={event => setSaleDate(event.target.value)} />
               <button className="button button-rose" onClick={() => setCart({})}>Cancel</button>
-              <button className="button button-orange" onClick={() => openModal("sale")}>Pay</button>
+              <button className="button button-orange" onClick={() => openModal("sale", { paymentMethod: "mobile_money" })}>Pay</button>
               <button className="button button-muted" onClick={() => openModal("invoice")}>Open</button>
               <button className="button button-blue" onClick={() => openModal("sale")}>▣ &nbsp; SELL</button>
             </div>
-            <Table headers={["INVOICE", "CLIENT", "TOTAL PRICE", "ITEMS", "DATE", "CREDIT", "OPERATOR"]}>
-              {sales.filter(sale => sale.date === saleDate).map(sale => <tr key={sale.id}>
-                <td>INV-{String(sale.id).slice(-6)}</td><td>{sale.customer}</td><td>{money(sale.total)}</td><td>{sale.items}</td><td>{sale.date}</td><td>{money(sale.credit)}</td><td>{session?.name}</td>
+            <Table headers={["INVOICE", "CLIENT", "PHONE", "TOTAL PRICE", "ITEMS", "DATE", "PAYMENT", "OPERATOR", ""]}>
+              {salesLoading && <tr><td colSpan={9}>Loading invoices…</td></tr>}
+              {!salesLoading && sales.filter(sale => sale.date === saleDate).length === 0 && <tr><td colSpan={9}>No invoices for this date.</td></tr>}
+              {sales.filter(sale => sale.date === saleDate).map(sale => <tr key={sale.receiptNumber}>
+                <td>{sale.receiptNumber}</td><td>{sale.customer}</td><td>{sale.customerPhone || "—"}</td><td>{money(sale.total)}</td><td>{sale.items}</td><td>{sale.date}</td><td>{sale.paymentMethod}</td><td>{session?.name}</td>
+                <td><button className="table-action invoice-print-action" onClick={() => printInvoice(sale)}>Print</button></td>
               </tr>)}
             </Table>
             <div className="sales-summary"><span><i className="legend-red" /> Cancelled invoice</span><span><i className="legend-pink" /> No VAT sale</span><strong>Total amount: {money(sales.reduce((sum, sale) => sum + sale.total, 0))} &nbsp; | &nbsp; Total credit: RWF 0 (RWF 0 paid)</strong></div>
@@ -654,8 +1415,8 @@ export default function Home() {
 
           {screen === "Discount" && <>
             <div className="section-toolbar"><span className="section-label">Discounts</span><button className="button button-blue" onClick={() => openModal("discount")}>＋ ADD</button></div>
-            <Table headers={["CUSTOMER", "PRODUCT", "TITLE", "START ON", "END ON", "OPTIONS"]}>
-              {discounts.map(discount => <tr key={discount.id}><td>{discount.customer}</td><td>{discount.product}</td><td>{discount.title}</td><td>{discount.start}</td><td>{discount.end}</td><td><button className="table-action" onClick={() => setDiscounts(current => current.filter(item => item.id !== discount.id))}>Remove</button></td></tr>)}
+            <Table headers={["CUSTOMER", "PRODUCT", "TITLE", "DISCOUNT", "START ON", "END ON", "OPTIONS"]}>
+              {discounts.map(discount => <tr key={discount.id}><td>{discount.customer}</td><td>{discount.product}</td><td>{discount.title}</td><td>{discount.percent ? `${discount.percent}%` : "Set a new rule"}</td><td>{discount.start}</td><td>{discount.end}</td><td><button className="table-action" disabled={businessSaving} onClick={() => void removeDiscount(discount.id)}>Remove</button></td></tr>)}
             </Table>
             <div className="legend"><span><i className="legend-green" /> Today activated</span><span><i className="legend-red" /> Forced terminated</span></div>
           </>}
@@ -665,8 +1426,22 @@ export default function Home() {
               <span className="section-label">Customers</span>
               <div className="customer-search"><span>⌕</span><input aria-label="Search customers" value={customerQuery} onChange={event => setCustomerQuery(event.target.value)} /></div>
               <span className="sort-label">Sort</span><select aria-label="Customer page size"><option>20</option><option>50</option></select>
-              <button className="button button-muted" onClick={() => openModal("sale")}>Sale</button>
-              <button className="button button-orange" onClick={() => openModal("sale")}>Credit sale</button>
+              <button className="button button-orange" onClick={() => {
+                const customer = customers.find(item => item.id === selectedCustomer);
+                openModal("sale", {
+                  creditSale: "true",
+                  paymentMethod: "credit",
+                  ...(customer ? {
+                    customerId: customer.id,
+                    customerName: customer.name,
+                    customerPhone: customer.phone,
+                  } : {}),
+                });
+              }}>Credit sale</button>
+              <button className="button button-muted" disabled={!selectedCustomer || !customers.some(customer => customer.id === selectedCustomer && customer.credit > 0) || businessSaving} onClick={() => {
+                const customer = customers.find(item => item.id === selectedCustomer);
+                if (customer) void openCreditPayment(customer);
+              }}>Pay credit</button>
               <button className="button button-teal" disabled={!selectedCustomer} onClick={() => {
                 const customer = customers.find(item => item.id === selectedCustomer);
                 if (!customer) return;
@@ -674,28 +1449,33 @@ export default function Home() {
                 setEditingCustomer(customer.id);
                 setModal("customer");
               }}>Edit</button>
-              <button className="button button-rose" disabled={!selectedCustomer} onClick={() => {
-                setCustomers(current => current.filter(item => item.id !== selectedCustomer));
-                setSelectedCustomer(null);
-              }}>Remove</button>
+              <button className="button button-rose" disabled={!selectedCustomer || businessSaving} onClick={() => void removeCustomer()}>Remove</button>
               <button className="button button-blue" onClick={() => openModal("customer")}>＋ ADD</button>
             </div>
             <Table headers={["NAME", "EMAIL", "PHONE", "TIN", "CREDITS RWF", "ADDRESS"]}>
-              {filteredCustomers.map(customer => <tr key={customer.id} className={selectedCustomer === customer.id ? "row-selected" : ""} onClick={() => setSelectedCustomer(customer.id)}><td>{customer.name}</td><td>{customer.email}</td><td>{customer.phone}</td><td>{customer.tin}</td><td>{money(customer.credit)}</td><td>{customer.address}</td></tr>)}
+              {filteredCustomers.map(customer => <tr key={customer.id} className={selectedCustomer === customer.id ? "row-selected" : ""} onClick={() => setSelectedCustomer(customer.id)}><td>{customer.name}</td><td>{customer.email || "—"}</td><td>{customer.phone || "—"}</td><td>{customer.tin || "—"}</td><td>{money(customer.credit)}</td><td>{customer.address || "—"}</td></tr>)}
             </Table>
             <div className="table-footer"><span>Page 1 of 1 (total records: {customers.length})</span></div>
           </>}
 
           {screen === "Request" && <>
             <div className="request-toolbar">
-              <span className="section-label">Requests</span>
-              <span className="sort-label">Page Size</span><select aria-label="Request page size"><option>20</option><option>50</option></select>
-              <select aria-label="Filter requests"><option>◫ &nbsp; Filter requests</option><option>Pending</option><option>Approved</option></select>
-              <button className="button button-muted" onClick={() => requests[0] && setMessage(`Request: ${requests[0].items}`)}>Open</button>
-              <button className="button button-blue" onClick={() => openModal("request")}>＋ ADD</button>
+              <span className="section-label">Stock requests</span>
+              <label className="request-status-filter">Status
+                <select aria-label="Filter requests" value={requestStatusFilter} onChange={event => setRequestStatusFilter(event.target.value)}>
+                  <option>All statuses</option><option>Pending</option><option>Approved</option><option>Rejected</option>
+                </select>
+              </label>
+              <button className="button button-blue" onClick={() => openModal("request")}>＋ NEW REQUEST</button>
+            </div>
+            <div className="request-summary">
+              <span>{filteredRequests.length} {requestStatusFilter === "All statuses" ? "total" : requestStatusFilter.toLowerCase()} request{filteredRequests.length === 1 ? "" : "s"}</span>
+              <span>{requests.filter(request => request.status === "Pending").length} awaiting review</span>
             </div>
             <Table headers={["DATE", "STATUS", "ITEMS REQUESTED", "OPERATOR"]}>
-              {requests.map(request => <tr key={request.id}><td>{request.date}</td><td>{request.status}</td><td>{request.items}</td><td>{request.operator}</td></tr>)}
+              {filteredRequests.length
+                ? filteredRequests.map(request => <tr key={request.id}><td>{request.date}</td><td><span className={`request-status ${request.status.toLowerCase()}`}>{request.status}</span></td><td className="request-items-cell">{request.items}</td><td>{request.operator}</td></tr>)
+                : <tr><td className="empty-cell" colSpan={4}>{requests.length ? "No requests match this status." : "No stock requests yet. Create one to start the review process."}</td></tr>}
             </Table>
             <div className="table-footer"><span>Page 1 of 1 (total records: {requests.length})</span></div>
           </>}
@@ -761,9 +1541,7 @@ export default function Home() {
           />}
           {screen === "Approvals" && session?.role === "daf" && <DafApprovals
             requests={requests}
-            onDecision={(requestId, status) => setRequests(current => current.map(request =>
-              request.id === requestId ? { ...request, status } : request
-            ))}
+            onDecision={(requestId, status) => void decideRequest(requestId, status)}
           />}
           {screen === "Budgets" && session?.role === "daf" && <AdminInfoPage
             workspace="DAF WORKSPACE"
@@ -820,14 +1598,40 @@ export default function Home() {
             onSignOut={() => void signOut()}
           />}
 
-          {screen === "Report" && <div className="report-generator">
-            <span className="section-label">Report generator</span>
-            <label htmlFor="report-type">Choose report type</label>
-            <select id="report-type" value={reportType} onChange={event => setReportType(event.target.value)}>
-              <option value=""> </option>{reportTypes.map(type => <option key={type}>{type}</option>)}
-            </select>
-            {reportType && <div className="report-selection"><strong>{reportType}</strong><span>Choose a report type to generate a report for HQ Shop.</span></div>}
-          </div>}
+          {screen === "Report" && <section className="report-page">
+            <header className="report-page-header">
+              <div><span className="report-eyebrow">HQ SHOP · REPORTS</span><h2>Report generator</h2><p>Select a report and date range to preview saved sales, inventory, or request data.</p></div>
+              <button className="button button-blue" disabled={!reportData?.rows.length || reportDateRangeInvalid} onClick={exportReportCsv}>Export CSV</button>
+            </header>
+            <div className="report-controls">
+              <label className="field"><span>Report type</span>
+                <select id="report-type" value={reportType} onChange={event => setReportType(event.target.value)}>
+                  <option value="">Choose a report</option>{reportTypes.map(type => <option key={type}>{type}</option>)}
+                </select>
+              </label>
+              <label className="field"><span>From</span>
+                <input aria-label="Report start date" type="date" value={reportStartDate} disabled={!reportUsesDateRange} aria-invalid={reportDateRangeInvalid} onChange={event => setReportStartDate(event.target.value)} />
+              </label>
+              <label className="field"><span>To</span>
+                <input aria-label="Report end date" type="date" value={reportEndDate} disabled={!reportUsesDateRange} aria-invalid={reportDateRangeInvalid} onChange={event => setReportEndDate(event.target.value)} />
+              </label>
+            </div>
+            {!reportType
+              ? <div className="report-empty-state"><span>▤</span><strong>Choose a report to get started</strong><p>Preview and export summaries from the records available in this shop.</p></div>
+              : <>
+                <div className="report-result-heading"><div><h3>{reportType}</h3><span>{["Inventory On Hand", "Low Stock", "Out of Stock"].includes(reportType) ? "Current inventory snapshot" : `${reportStartDate} to ${reportEndDate}`}</span></div><span>{reportData?.rows.length || 0} rows</span></div>
+                {reportDateRangeInvalid && <p className="report-range-error" role="alert">The start date must be on or before the end date.</p>}
+                <div className="report-metrics">{reportData?.metrics.map(metric =>
+                  <article className="report-metric" key={metric.label}><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.detail}</small></article>
+                )}</div>
+                {reportData && <Table headers={reportData.headers}>
+                  {reportData.rows.length
+                    ? reportData.rows.map((row, index) => <tr key={`${reportType}-${index}`}>{row.map((cell, cellIndex) => <td key={`${cellIndex}-${cell}`}>{cell}</td>)}</tr>)
+                    : <tr><td className="empty-cell" colSpan={reportData.headers.length}>{reportData.emptyMessage}</td></tr>}
+                </Table>}
+                <p className="report-data-note">Report data reflects the records currently loaded for this account.</p>
+              </>}
+          </section>}
         </section>
 
         {(session?.role === "cashier" || (session?.role === "administration" && screen === "Transactions")) && <footer className="bottom-actions">
@@ -845,13 +1649,23 @@ export default function Home() {
           <p>Enter the product details for HQ Shop.</p>
           <FormField label="Code" value={form.code || ""} onChange={value => setField("code", value)} />
           <FormField label="Name" value={form.name || ""} onChange={value => setField("name", value)} />
-          <FormField label="Barcode" value={form.barcode || ""} onChange={value => setField("barcode", value)} />
+          <FormField
+            label="Barcode"
+            value={form.barcode || ""}
+            onChange={value => setField("barcode", value)}
+            autoFocus
+            autoComplete="off"
+            placeholder="Scan or type barcode"
+          />
+          <CameraBarcodeScanner onDetected={barcode => setField("barcode", barcode)} />
+          <small className="hint">USB/Bluetooth scanners and manual barcode entry also work.</small>
           <FormField label="Purchase cost" type="number" value={form.purchase || ""} onChange={value => setField("purchase", value)} />
           <FormField label="Sale price" type="number" value={form.price || ""} onChange={value => setField("price", value)} />
           <FormField label="Quantity" type="number" value={form.quantity || ""} onChange={value => setField("quantity", value)} />
           <FormField label="Category" value={form.category || ""} onChange={value => setField("category", value)} />
           <FormField label="Origin" value={form.origin || ""} onChange={value => setField("origin", value)} />
-          <button className="button button-blue modal-submit" onClick={saveProduct}>Save product</button>
+          {inventoryError && <p className="inventory-error" role="alert">{inventoryError}</p>}
+          <button className="button button-blue modal-submit" disabled={inventorySaving} onClick={saveProduct}>{inventorySaving ? "Saving…" : "Save product"}</button>
         </>}
         {modal === "adjust" && <>
           <h2 id="modal-heading">Adjust stock</h2><p>{form.name || "Select a product and set its new quantity."}</p>
@@ -861,7 +1675,8 @@ export default function Home() {
             setEditingProduct(product?.id || null);
           }}><option value="">Select product</option>{products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>}
           <FormField label="New quantity" type="number" value={form.quantity || ""} onChange={value => setField("quantity", value)} />
-          <button className="button button-blue modal-submit" onClick={saveProduct}>Save adjustment</button>
+          {inventoryError && <p className="inventory-error" role="alert">{inventoryError}</p>}
+          <button className="button button-blue modal-submit" disabled={inventorySaving} onClick={saveProduct}>{inventorySaving ? "Saving…" : "Save adjustment"}</button>
         </>}
         {modal === "customer" && <>
           <h2 id="modal-heading">{editingCustomer === null ? "Add customer" : "Edit customer"}</h2><p>Customer details</p>
@@ -870,34 +1685,92 @@ export default function Home() {
           <FormField label="Phone" value={form.phone || ""} onChange={value => setField("phone", value)} />
           <FormField label="TIN" value={form.tin || ""} onChange={value => setField("tin", value)} />
           <FormField label="Address" value={form.address || ""} onChange={value => setField("address", value)} />
-          <button className="button button-blue modal-submit" onClick={saveCustomer}>{editingCustomer === null ? "Save customer" : "Save changes"}</button>
+          <button className="button button-blue modal-submit" disabled={businessSaving} onClick={() => void saveCustomer()}>{businessSaving ? "Saving…" : editingCustomer === null ? "Save customer" : "Save changes"}</button>
         </>}
         {modal === "discount" && <>
-          <h2 id="modal-heading">Add discount</h2><p>Create a discount rule.</p>
+          <h2 id="modal-heading">Add discount</h2><p>Create a percentage rule. Active rules can be selected at checkout.</p>
           <FormField label="Title" value={form.title || ""} onChange={value => setField("title", value)} />
-          <FormField label="Customer" value={form.customer || ""} onChange={value => setField("customer", value)} />
-          <FormField label="Product" value={form.product || ""} onChange={value => setField("product", value)} />
+          <label className="field"><span>Customer</span><select aria-label="Discount customer" value={form.customerId || ""} onChange={event => setField("customerId", event.target.value)}>
+            <option value="">All customers</option>
+            {customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</option>)}
+          </select></label>
+          <label className="field"><span>Product</span><select aria-label="Discount product" value={form.product || "All products"} onChange={event => setField("product", event.target.value)}>
+            <option value="All products">All products</option>
+            {products.map(product => <option key={product.id} value={product.code}>{product.name} · {product.code}</option>)}
+          </select></label>
+          <FormField label="Discount percentage" type="number" value={form.percent || ""} onChange={value => setField("percent", value)} placeholder="e.g. 10" />
           <FormField label="Start on" type="date" value={form.start || today()} onChange={value => setField("start", value)} />
           <FormField label="End on" type="date" value={form.end || today()} onChange={value => setField("end", value)} />
-          <button className="button button-blue modal-submit" onClick={saveDiscount}>Save discount</button>
+          <button className="button button-blue modal-submit" disabled={businessSaving} onClick={() => void saveDiscount()}>{businessSaving ? "Saving…" : "Save discount"}</button>
         </>}
         {modal === "request" && <>
-          <h2 id="modal-heading">Add request</h2><p>Request products for HQ Shop.</p>
-          <FormField label="Items requested" value={form.items || ""} onChange={value => setField("items", value)} />
-          <button className="button button-blue modal-submit" onClick={saveRequest}>Save request</button>
+          <h2 id="modal-heading">New stock request</h2><p>List each item and quantity needed for HQ Shop. The DAF team can review and approve the request.</p>
+          <TextAreaField
+            label="Items and quantities"
+            value={form.items || ""}
+            onChange={value => setField("items", value)}
+            placeholder={"Example:\n12 notebooks\n6 blue pens"}
+            maxLength={1000}
+          />
+          <small className="request-form-hint">Use one item per line and include the quantity. {form.items?.length || 0}/1000 characters.</small>
+          <button className="button button-blue modal-submit" disabled={businessSaving} onClick={() => void saveRequest()}>{businessSaving ? "Saving…" : "Save request"}</button>
         </>}
         {modal === "sale" && <>
-          <h2 id="modal-heading">New sale</h2><p>Select items and review the total for this sale.</p>
-          {products.length ? <div className="sale-product-list">{products.map(product => <div key={product.id}><span>{product.name}<small>{money(product.price)} · {product.quantity} available</small></span><button disabled={product.quantity === 0} onClick={() => setCart(current => ({ ...current, [product.id]: Math.min(product.quantity, (current[product.id] || 0) + 1) }))}>＋</button><b>{cart[product.id] || 0}</b></div>)}</div> : <p className="empty-products">No products available. Add products in Inventory first.</p>}
-          <label className="field"><span>Customer</span><select value={form.customer || ""} onChange={event => setField("customer", event.target.value)}><option value="">Walk-in customer</option>{customers.map(customer => <option key={customer.id}>{customer.name}</option>)}</select></label>
-          <div className="modal-total"><span>Total</span><strong>{money(cartTotal)}</strong></div>
-          <button className="button button-blue modal-submit" disabled={!products.length} onClick={finishSale}>Complete sale</button>
+          <h2 id="modal-heading">{form.creditSale === "true" ? "New credit sale" : "New sale"}</h2><p>Scan or enter each product code, then enter customer details to create an invoice.</p>
+          <form className="sale-code-entry" onSubmit={event => { event.preventDefault(); addSaleProductByCode(form.productCode || ""); }}>
+            <label className="field"><span>Product code or barcode</span><input autoFocus autoComplete="off" aria-label="Product code or barcode" placeholder="Scan or type code, then press Enter" value={form.productCode || ""} onChange={event => setField("productCode", event.target.value)} /></label>
+            <button type="submit" className="button button-blue" disabled={!form.productCode?.trim()}>Add product</button>
+          </form>
+          <CameraBarcodeScanner onDetected={addSaleProductByCode} />
+          {products.length ? <div className="sale-product-list">{products.map(product => <div key={product.id}><span>{product.name}<small>{product.code} · {money(product.price)} · {product.quantity} available</small></span><button aria-label={`Remove one ${product.name}`} disabled={!cart[product.id]} onClick={() => setCart(current => ({ ...current, [product.id]: Math.max(0, (current[product.id] || 0) - 1) }))}>−</button><b>{cart[product.id] || 0}</b><button aria-label={`Add one ${product.name}`} disabled={(cart[product.id] || 0) >= product.quantity} onClick={() => setCart(current => ({ ...current, [product.id]: (current[product.id] || 0) + 1 }))}>＋</button></div>)}</div> : <p className="empty-products">No products available. Add products in Inventory first.</p>}
+          {form.creditSale === "true"
+            ? <label className="field"><span>Choose existing customer</span><select aria-label="Credit sale customer" required value={form.customerId || ""} onChange={event => selectSaleCustomer(event.target.value)}>
+                <option value="">Select a saved customer</option>
+                {customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</option>)}
+              </select></label>
+            : <>
+              <label className="field"><span>Saved customer (optional)</span><select aria-label="Sale customer" value={form.customerId || ""} onChange={event => selectSaleCustomer(event.target.value)}>
+                <option value="">Enter customer manually</option>
+                {customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</option>)}
+              </select></label>
+              {form.customerId
+                ? <label className="field"><span>Customer name</span><input value={customers.find(customer => customer.id === form.customerId)?.name || ""} readOnly /></label>
+                : <FormField label="Customer name" value={form.customerName || ""} onChange={value => setField("customerName", value)} />}
+            </>}
+          {form.creditSale === "true" && customers.length === 0 && <small className="request-form-hint">Add a customer before creating a credit sale.</small>}
+          {activeSaleDiscounts.length > 0 && <label className="field"><span>Discount (optional)</span><select aria-label="Apply discount" value={selectedSaleDiscount?.id || ""} onChange={event => setField("discountId", event.target.value)}>
+            <option value="">No discount</option>
+            {activeSaleDiscounts.map(discount => <option key={discount.id} value={discount.id}>{discount.title} · {discount.percent}% · {discount.product}</option>)}
+          </select></label>}
+          {form.discountId && !selectedSaleDiscount && <p className="inventory-error" role="alert">This discount no longer matches the customer or items in the cart.</p>}
+          <FormField label="Customer phone number" type="tel" value={form.customerPhone || ""} onChange={value => setField("customerPhone", value)} />
+          {form.creditSale === "true"
+            ? <p className="credit-sale-note">No payment is collected now. The discounted total will be added to this customer&apos;s outstanding balance.</p>
+            : <label className="field"><span>Payment method</span><select value={form.paymentMethod || "cash"} onChange={event => {
+              setField("paymentMethod", event.target.value);
+              setPaymentQrOpen(false);
+            }}><option value="cash">Cash</option><option value="card">Card</option><option value="mobile_money">MTN Mobile Money</option><option value="other">Other</option></select></label>}
+          {form.paymentMethod === "mobile_money" && paymentQrOpen && <section className="payment-qr-panel" aria-label="MTN Mobile Money payment QR">
+            <h3>Pay CARITAS SHOP with MTN Mobile Money</h3>
+            <p>Scan the QR and tap the call prompt. MTN will open its payment confirmation flow. Complete the payment and confirm receipt before saving the invoice.</p>
+            <QRCodeSVG value={mtnPayment.qrValue} size={192} level="M" includeMargin />
+            <code>{mtnPayment.ussdCode}</code>
+            <small>Merchant: CARITAS SHOP · Amount: {money(saleTotal)}</small>
+          </section>}
+          {saleError && <p className="inventory-error" role="alert">{saleError}</p>}
+          {saleDiscountTotal > 0 && <div className="sale-discount-breakdown"><span>Subtotal <strong>{money(cartTotal)}</strong></span><span>Discount <strong>−{money(saleDiscountTotal)}</strong></span></div>}
+          <div className="modal-total"><span>{form.creditSale === "true" ? "Credit due" : "Total"}</span><strong>{money(saleTotal)}</strong></div>
+          {form.creditSale === "true"
+            ? <button className="button button-blue modal-submit" disabled={!products.length || !form.customerId || saleSaving} onClick={() => void finishSale()}>{saleSaving ? "Saving credit sale…" : "Save credit sale"}</button>
+            : form.paymentMethod === "mobile_money"
+            ? <button className="button button-blue modal-submit" disabled={!products.length || saleSaving} onClick={() => paymentQrOpen ? void finishSale() : showMtnPaymentQr()}>{saleSaving ? "Saving invoice…" : paymentQrOpen ? "Payment received — Save & print invoice" : "Pay with MTN MoMo — Show QR"}</button>
+            : <button className="button button-blue modal-submit" disabled={!products.length || saleSaving} onClick={() => void finishSale()}>{saleSaving ? "Saving invoice…" : "Save & print invoice"}</button>}
         </>}
         {modal === "invoice" && <>
           <h2 id="modal-heading">Proforma invoice</h2><p>Start a new invoice or select a product to add.</p>
           {products.length ? <div className="sale-product-list">{products.map(product => <div key={product.id}><span>{product.name}<small>{money(product.price)} · {product.quantity} available</small></span><button disabled={product.quantity === 0} onClick={() => setCart(current => ({ ...current, [product.id]: (current[product.id] || 0) + 1 }))}>＋</button><b>{cart[product.id] || 0}</b></div>)}</div> : <p className="empty-products">No products available. Add products in Inventory first.</p>}
           <div className="modal-total"><span>Estimated total</span><strong>{money(cartTotal)}</strong></div>
-          <button className="button button-blue modal-submit" onClick={() => { setModal("sale"); setForm({}); }}>Continue to sale</button>
+          <button className="button button-blue modal-submit" onClick={() => openModal("sale", { paymentMethod: "mobile_money" })}>Continue to sale</button>
         </>}
         {modal === "user" && <>
           <h2 id="modal-heading">{editingUserId ? "Edit staff account" : "Add staff account"}</h2>
@@ -916,7 +1789,58 @@ export default function Home() {
         </>}
       </section>
     </div>}
+    {printSale && <InvoicePrintView sale={printSale} />}
   </div>;
+}
+
+function InvoicePrintView({ sale }: { sale: Sale }) {
+  const soldAt = new Date(sale.id);
+  const date = Number.isNaN(soldAt.getTime()) ? sale.date : soldAt.toLocaleDateString("en-GB");
+  const time = Number.isNaN(soldAt.getTime()) ? "" : soldAt.toLocaleTimeString("en-GB");
+  const amount = (value: number) => value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+  return <section id="print-invoice" aria-label="Invoice to print">
+    <header className="receipt-header">
+      <strong>CARITAS SHOP</strong>
+      <span>HQ Shop</span>
+      <h1>FACTURE / SALES INVOICE</h1>
+      <span>INVOICE NO: {sale.receiptNumber}</span>
+    </header>
+    <div className="receipt-divider" />
+    <div className="receipt-customer">
+      <div><span>CUSTOMER NAME:</span><strong>{sale.customer}</strong></div>
+      <div><span>PHONE:</span><strong>{sale.customerPhone || "—"}</strong></div>
+    </div>
+    <div className="receipt-divider" />
+    <div className="receipt-items">
+      {sale.lineItems.map(item => <article className="receipt-item" key={`${item.productId}-${item.sku}`}>
+        <strong>{item.name}</strong>
+        <span>{item.sku}</span>
+        <div><span>{amount(item.unitPrice)} x {item.quantity}</span><strong>{amount(item.lineTotal)}</strong></div>
+      </article>)}
+    </div>
+    <div className="receipt-divider" />
+    <div className="receipt-totals">
+      <div><span>Total</span><strong>{amount(sale.total)}</strong></div>
+      <div><span>TOTAL RWF</span><strong>{amount(sale.total)}</strong></div>
+    </div>
+    <div className="receipt-divider" />
+    <div className="receipt-payment">
+      <div><strong>{sale.paymentMethod.replaceAll("_", " ").toUpperCase()}</strong><strong>{amount(sale.total)}</strong></div>
+      <div><span>ITEMS NUMBER</span><strong>{sale.items}</strong></div>
+    </div>
+    <div className="receipt-divider" />
+    <footer className="receipt-footer">
+      <strong>RECEIPT DETAILS</strong>
+      <span>Date: {date}{time ? `  Time: ${time}` : ""}</span>
+      <span>Invoice number: {sale.receiptNumber}</span>
+      <p>Thank you for shopping with us.</p>
+      <span>Sales invoice only — tax receipt details are not configured.</span>
+    </footer>
+  </section>;
 }
 
 function AdminInfoPage({ title, description, detail, workspace = "ADMINISTRATION" }: { title: string; description: string; detail: string; workspace?: string }) {
@@ -929,11 +1853,11 @@ function AdminInfoPage({ title, description, detail, workspace = "ADMINISTRATION
   </section>;
 }
 
-function DafApprovals({ requests, onDecision }: { requests: Request[]; onDecision: (requestId: number, status: "Approved" | "Rejected") => void }) {
+function DafApprovals({ requests, onDecision }: { requests: Request[]; onDecision: (requestId: string, status: "Approved" | "Rejected") => void }) {
   const pendingCount = requests.filter(request => request.status === "Pending").length;
   return <section className="daf-approvals-page">
     <div className="admin-section-intro">
-      <div><span>DAF WORKSPACE</span><h2>Approvals</h2><p>Review and decide stock requests submitted in this session.</p></div>
+      <div><span>DAF WORKSPACE</span><h2>Approvals</h2><p>Review and decide saved stock requests.</p></div>
       <strong>{pendingCount} pending</strong>
     </div>
     <Table headers={["DATE", "REQUEST", "SUBMITTED BY", "STATUS", "DECISION"]}>
@@ -948,7 +1872,7 @@ function DafApprovals({ requests, onDecision }: { requests: Request[]; onDecisio
         </div> : "—"}</td>
       </tr>)}
     </Table>
-    <p className="accountant-ledger-note">Approval decisions are held in the current browser session and are not saved to the server.</p>
+    <p className="accountant-ledger-note">Approval decisions are saved with the request.</p>
   </section>;
 }
 
@@ -959,8 +1883,8 @@ function AccountantSalesLedger({ title, saleDate, sales, onDateChange }: { title
       <label className="accountant-ledger-date">Date <input aria-label={`${title} date`} type="date" value={saleDate} onChange={event => onDateChange(event.target.value)} /></label>
     </div>
     <Table headers={["REFERENCE", "CUSTOMER", "DATE", "ITEMS", "AMOUNT", "CREDIT"]}>
-      {sales.map(sale => <tr key={sale.id}>
-        <td>INV-{String(sale.id).slice(-6)}</td>
+      {sales.map(sale => <tr key={sale.receiptNumber}>
+        <td>{sale.receiptNumber}</td>
         <td>{sale.customer}</td>
         <td>{sale.date}</td>
         <td>{sale.items}</td>
@@ -1203,7 +2127,7 @@ function DafDashboard({
             <span><strong>{request.items}</strong><small>{request.date} · {request.operator}</small></span>
             <span className={`request-status ${request.status.toLowerCase()}`}>{request.status}</span>
           </div>
-        ) : <DashboardEmpty>No requests have been submitted in this session.</DashboardEmpty>}
+        ) : <DashboardEmpty>No requests have been submitted.</DashboardEmpty>}
       </section>
     </div>
     <div className="role-dashboard-footer">
@@ -1233,8 +2157,8 @@ function DashboardSalesTable({ sales }: { sales: Sale[] }) {
   if (!recentSales.length) return <DashboardEmpty>No sales recorded for this date in the current session.</DashboardEmpty>;
   return <div className="dashboard-table-wrap"><table className="dashboard-data-table">
     <thead><tr><th>INVOICE</th><th>CUSTOMER</th><th>ITEMS</th><th>TOTAL</th></tr></thead>
-    <tbody>{recentSales.map(sale => <tr key={sale.id}>
-      <td>INV-{String(sale.id).slice(-6)}</td><td>{sale.customer}</td><td>{sale.items}</td><td>{money(sale.total)}</td>
+    <tbody>{recentSales.map(sale => <tr key={sale.receiptNumber}>
+      <td>{sale.receiptNumber}</td><td>{sale.customer}</td><td>{sale.items}</td><td>{money(sale.total)}</td>
     </tr>)}</tbody>
   </table></div>;
 }
@@ -1310,6 +2234,10 @@ function Table({ headers, children }: { headers: string[]; children: React.React
   </tbody></table></div>;
 }
 
-function FormField({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
-  return <label className="field"><span>{label}</span><input type={type} value={value} onChange={event => onChange(event.target.value)} /></label>;
+function FormField({ label, value, onChange, type = "text", autoFocus, autoComplete, placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; autoFocus?: boolean; autoComplete?: string; placeholder?: string }) {
+  return <label className="field"><span>{label}</span><input type={type} value={value} onChange={event => onChange(event.target.value)} autoFocus={autoFocus} autoComplete={autoComplete} placeholder={placeholder} /></label>;
+}
+
+function TextAreaField({ label, value, onChange, placeholder, maxLength }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; maxLength?: number }) {
+  return <label className="field"><span>{label}</span><textarea value={value} onChange={event => onChange(event.target.value)} placeholder={placeholder} maxLength={maxLength} rows={5} /></label>;
 }

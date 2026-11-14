@@ -1,6 +1,7 @@
 
 import { Router } from "express";
 import mongoose from "mongoose";
+import InventoryLog from "../models/InventoryLog.js";
 import Product from "../models/Product.js";
 
 const router = Router();
@@ -45,7 +46,7 @@ router.get("/", async (req, res, next) => {
 router.post("/", async (req, res, next) => {
   try {
     const {
-      sku, name, itemType, isbn, author, category,
+      sku, name, barcode, itemType, isbn, author, category, origin,
       sellingPrice, costPrice, stockQty,
     } = req.body;
 
@@ -80,10 +81,46 @@ router.post("/", async (req, res, next) => {
       });
     }
 
-    const product = await Product.create({
-      sku, name, itemType, isbn, author, category,
-      sellingPrice, costPrice, stockQty,
-    });
+    if (
+      (barcode !== undefined && typeof barcode !== "string") ||
+      (origin !== undefined && typeof origin !== "string")
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "barcode and origin must be strings",
+      });
+    }
+
+    const session = await mongoose.startSession();
+    let product;
+    try {
+      await session.withTransaction(async () => {
+        [product] = await Product.create(
+          [{
+            sku, name, barcode, itemType, isbn, author, category, origin,
+            sellingPrice, costPrice, stockQty,
+          }],
+          { session }
+        );
+
+        if (product.stockQty > 0) {
+          await InventoryLog.create(
+            [{
+              productId: product._id,
+              change: product.stockQty,
+              quantityBefore: 0,
+              quantityAfter: product.stockQty,
+              reason: "opening_stock",
+              note: "Opening balance set at product creation.",
+              performedBy: req.user.email,
+            }],
+            { session }
+          );
+        }
+      });
+    } finally {
+      await session.endSession();
+    }
 
     res.status(201).json({
       success: true,

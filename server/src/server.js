@@ -12,6 +12,9 @@ import productRoutes from "./routes/product.routes.js";
 import inventoryRoutes from "./routes/inventory.routes.js";
 import saleRoutes from "./routes/sale.routes.js";
 import syncRoutes from "./routes/sync.routes.js";
+import customerRoutes from "./routes/customer.routes.js";
+import discountRoutes from "./routes/discount.routes.js";
+import requestRoutes from "./routes/request.routes.js";
 
 dotenv.config();
 
@@ -51,6 +54,9 @@ app.use("/api/products", authenticate, productRoutes);
 app.use("/api/inventory", authenticate, inventoryRoutes);
 app.use("/api/sales", authenticate, saleRoutes);
 app.use("/api/sync", authenticate, syncRoutes);
+app.use("/api/customers", authenticate, customerRoutes);
+app.use("/api/discounts", authenticate, discountRoutes);
+app.use("/api/requests", authenticate, requestRoutes);
 
 // Unknown routes
 app.use((req, res) => {

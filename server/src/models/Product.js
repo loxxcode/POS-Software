@@ -11,6 +11,7 @@ const productSchema = new mongoose.Schema(
       uppercase: true,
     },
     name: { type: String, required: true, trim: true },
+    barcode: { type: String, trim: true, default: "" },
     itemType: {
       type: String,
       enum: ["book", "stationery", "other"],
@@ -19,6 +20,7 @@ const productSchema = new mongoose.Schema(
     isbn: { type: String, trim: true, default: "" },
     author: { type: String, trim: true, default: "" },
     category: { type: String, trim: true, default: "General" },
+    origin: { type: String, trim: true, default: "Local" },
     sellingPrice: { type: Number, required: true, min: 0 },
     costPrice: { type: Number, default: 0, min: 0 },
     stockQty: {

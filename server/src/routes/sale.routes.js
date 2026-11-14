@@ -2,6 +2,8 @@
 import { Router } from "express";
 import mongoose from "mongoose";
 import { randomUUID } from "node:crypto";
+import Customer from "../models/Customer.js";
+import Discount from "../models/Discount.js";
 import Product from "../models/Product.js";
 import Sale from "../models/Sale.js";
 import SyncJob from "../models/SyncJob.js";
@@ -9,7 +11,12 @@ import SyncJob from "../models/SyncJob.js";
 const router = Router();
 
 router.post("/", async (req, res, next) => {
-  const { clientRequestId, items, paymentMethod } = req.body;
+  const { clientRequestId, items, paymentMethod } = req.body || {};
+  const saleType = req.body?.saleType || "paid";
+  const customerId = req.body?.customerId ?? null;
+  const discountId = req.body?.discountId ?? null;
+  const customerName = req.body?.customerName ?? "Walk-in customer";
+  const customerPhone = req.body?.customerPhone ?? "";
 
   if (
     typeof clientRequestId !== "string" ||
@@ -29,10 +36,37 @@ router.post("/", async (req, res, next) => {
     });
   }
 
-  if (!["cash", "card", "mobile_money", "other"].includes(paymentMethod)) {
+  if (
+    !["cash", "card", "mobile_money", "other", "credit"].includes(paymentMethod) ||
+    !["paid", "credit"].includes(saleType) ||
+    (saleType === "credit") !== (paymentMethod === "credit")
+  ) {
     return res.status(400).json({
       success: false,
-      message: "Invalid payment method",
+      message: "Invalid sale type or payment method",
+    });
+  }
+
+  if (
+    (customerId !== null && !mongoose.isValidObjectId(customerId)) ||
+    (saleType === "credit" && customerId === null) ||
+    (discountId !== null && !mongoose.isValidObjectId(discountId))
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Credit sales require a valid customer and discounts must be valid.",
+    });
+  }
+
+  if (
+    (saleType !== "credit" && (typeof customerName !== "string" || !customerName.trim() || customerName.trim().length > 120)) ||
+    typeof customerPhone !== "string" ||
+    customerPhone.trim().length > 30 ||
+    (customerPhone.trim() && !/^[+()\d\s-]{7,30}$/.test(customerPhone.trim()))
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Enter a valid customer name and phone number.",
     });
   }
 
@@ -49,7 +83,12 @@ router.post("/", async (req, res, next) => {
     }
   }
 
-  const existing = await Sale.findOne({ clientRequestId }).catch(next);
+  let existing;
+  try {
+    existing = await Sale.findOne({ clientRequestId });
+  } catch (error) {
+    return next(error);
+  }
   if (existing) {
     return res.json({ success: true, duplicate: true, data: existing });
   }
@@ -62,6 +101,34 @@ router.post("/", async (req, res, next) => {
     await session.withTransaction(async () => {
       const saleItems = [];
       let subtotal = 0;
+      let discountTotal = 0;
+      let discountMatchedProduct = false;
+      const customer = customerId
+        ? await Customer.findById(customerId).session(session)
+        : null;
+
+      if (customerId && !customer) {
+        throw Object.assign(new Error("Customer not found."), { status: 404 });
+      }
+      if (saleType === "credit" && !customer) {
+        throw Object.assign(new Error("Select an existing customer for a credit sale."), { status: 400 });
+      }
+
+      const discount = discountId
+        ? await Discount.findById(discountId).session(session)
+        : null;
+      if (discountId && !discount) {
+        throw Object.assign(new Error("Discount not found."), { status: 404 });
+      }
+      if (discount) {
+        const currentDate = new Date().toISOString().slice(0, 10);
+        if (currentDate < discount.start || currentDate > discount.end) {
+          throw Object.assign(new Error("This discount is not active today."), { status: 400 });
+        }
+        if (discount.customerId && String(discount.customerId) !== String(customerId)) {
+          throw Object.assign(new Error("This discount is not available for the selected customer."), { status: 400 });
+        }
+      }
 
       for (const item of items) {
         const product = await Product.findOneAndUpdate(
@@ -88,6 +155,18 @@ router.post("/", async (req, res, next) => {
         );
 
         subtotal = Number((subtotal + lineTotal).toFixed(2));
+        const discountProduct = discount?.product.trim().toLowerCase();
+        const productMatchesDiscount = Boolean(
+          discount &&
+          (discountProduct === "all products" ||
+            discountProduct === product.sku.toLowerCase() ||
+            discountProduct === product.name.toLowerCase())
+        );
+        const lineDiscount = productMatchesDiscount
+          ? Number((lineTotal * discount.percent / 100).toFixed(2))
+          : 0;
+        if (productMatchesDiscount) discountMatchedProduct = true;
+        discountTotal = Number((discountTotal + lineDiscount).toFixed(2));
 
         saleItems.push({
           productId: product._id,
@@ -96,16 +175,44 @@ router.post("/", async (req, res, next) => {
           quantity: item.quantity,
           unitPrice: product.sellingPrice,
           lineTotal,
+          discountAmount: lineDiscount,
         });
+      }
+
+      if (discount && !discountMatchedProduct) {
+        throw Object.assign(new Error("This discount does not apply to any product in the sale."), { status: 400 });
+      }
+
+      const total = Number(Math.max(0, subtotal - discountTotal).toFixed(2));
+      const amountPaid = saleType === "credit" ? 0 : total;
+      const balanceDue = saleType === "credit" ? total : 0;
+      if (customer && saleType === "credit") {
+        customer.credit = Number((customer.credit + balanceDue).toFixed(2));
+        await customer.save({ session });
       }
 
       const [sale] = await Sale.create(
         [{
           receiptNumber: `LIB-${Date.now()}-${randomUUID().slice(0, 8)}`,
           clientRequestId,
+          customerId: customer?._id || null,
+          customerName: customer?.name || customerName.trim(),
+          customerPhone: customer?.phone || customerPhone.trim(),
           items: saleItems,
           subtotal,
-          total: subtotal,
+          discountTotal,
+          total,
+          amountPaid,
+          balanceDue,
+          paymentStatus: saleType === "credit" ? "unpaid" : "paid",
+          appliedDiscounts: discount
+            ? [{
+                discountId: discount._id,
+                title: discount.title,
+                percent: discount.percent,
+                amount: discountTotal,
+              }]
+            : [],
           paymentMethod,
           currency: "RWF",
         }],
@@ -122,7 +229,9 @@ router.post("/", async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: "Sale recorded; QuickBooks sync is pending",
+      message: saleType === "credit"
+        ? "Credit sale recorded; customer balance updated and QuickBooks sync is pending"
+        : "Sale recorded; QuickBooks sync is pending",
       data: createdSale,
     });
   } catch (error) {

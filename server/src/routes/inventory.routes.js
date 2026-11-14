@@ -10,7 +10,7 @@ const router = Router();
 router.get("/", async (req, res, next) => {
   try {
     const data = await Product.find({ active: true })
-      .select("sku name itemType category stockQty sellingPrice")
+      .select("sku name barcode itemType category origin stockQty sellingPrice costPrice")
       .sort({ name: 1 })
       .limit(500)
       .lean();
@@ -85,6 +85,7 @@ router.post("/adjust", async (req, res, next) => {
           quantityAfter: after,
           reason,
           note,
+          performedBy: req.user.email,
         }],
         { session }
       );

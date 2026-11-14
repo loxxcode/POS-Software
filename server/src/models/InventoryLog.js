@@ -44,7 +44,8 @@ const inventoryLogSchema = new mongoose.Schema(
     // Will be populated from authenticated staff in a later stage.
     performedBy: {
       type: String,
-      default: "development",
+      required: true,
+      trim: true,
     },
   },
   { timestamps: true }
