@@ -58,7 +58,53 @@ router.post("/login", async (request, response, next) => {
 });
 
 router.get("/session", authenticate, (request, response) => {
-  return response.json({ success: true, user: request.user });
+  const { email, role, name } = request.user;
+  return response.json({ success: true, user: { email, role, name } });
+});
+
+router.post("/change-password", authenticate, async (request, response, next) => {
+  const { currentPassword, newPassword } = request.body || {};
+  if (
+    typeof currentPassword !== "string" ||
+    !currentPassword ||
+    currentPassword.length > 1024 ||
+    typeof newPassword !== "string" ||
+    newPassword.length < 12 ||
+    newPassword.length > 1024
+  ) {
+    return response.status(400).json({
+      success: false,
+      message: "Enter your current password and a new password of at least 12 characters.",
+    });
+  }
+
+  try {
+    const user = await User.findById(request.user.id).select("+passwordSalt +passwordHash");
+    if (!user) {
+      return response.status(404).json({ success: false, message: "Account not found." });
+    }
+    if (!await verifyPassword(currentPassword, user.passwordSalt, user.passwordHash)) {
+      return response.status(400).json({ success: false, message: "Current password is incorrect." });
+    }
+    if (await verifyPassword(newPassword, user.passwordSalt, user.passwordHash)) {
+      return response.status(400).json({ success: false, message: "Choose a password you have not used before." });
+    }
+
+    const { salt, hash } = await hashPassword(newPassword);
+    user.passwordSalt = salt;
+    user.passwordHash = hash;
+    user.sessionVersion = (user.sessionVersion || 0) + 1;
+    await user.save();
+
+    setSessionCookie(response, {
+      email: user.email,
+      role: user.role,
+      sessionVersion: user.sessionVersion,
+    });
+    return response.json({ success: true, message: "Password updated successfully." });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 router.post("/logout", (_request, response) => {

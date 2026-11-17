@@ -3,10 +3,11 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import { randomUUID } from "node:crypto";
 import Customer from "../models/Customer.js";
-import Discount from "../models/Discount.js";
 import Product from "../models/Product.js";
 import Sale from "../models/Sale.js";
 import SyncJob from "../models/SyncJob.js";
+import AppSettings from "../models/AppSettings.js";
+import { priceProformaItems } from "../services/proformaPricing.js";
 
 const router = Router();
 
@@ -99,10 +100,6 @@ router.post("/", async (req, res, next) => {
     let createdSale;
 
     await session.withTransaction(async () => {
-      const saleItems = [];
-      let subtotal = 0;
-      let discountTotal = 0;
-      let discountMatchedProduct = false;
       const customer = customerId
         ? await Customer.findById(customerId).session(session)
         : null;
@@ -112,22 +109,6 @@ router.post("/", async (req, res, next) => {
       }
       if (saleType === "credit" && !customer) {
         throw Object.assign(new Error("Select an existing customer for a credit sale."), { status: 400 });
-      }
-
-      const discount = discountId
-        ? await Discount.findById(discountId).session(session)
-        : null;
-      if (discountId && !discount) {
-        throw Object.assign(new Error("Discount not found."), { status: 404 });
-      }
-      if (discount) {
-        const currentDate = new Date().toISOString().slice(0, 10);
-        if (currentDate < discount.start || currentDate > discount.end) {
-          throw Object.assign(new Error("This discount is not active today."), { status: 400 });
-        }
-        if (discount.customerId && String(discount.customerId) !== String(customerId)) {
-          throw Object.assign(new Error("This discount is not available for the selected customer."), { status: 400 });
-        }
       }
 
       for (const item of items) {
@@ -149,41 +130,34 @@ router.post("/", async (req, res, next) => {
             { status: 400 }
           );
         }
+      }
 
-        const lineTotal = Number(
-          (product.sellingPrice * item.quantity).toFixed(2)
-        );
-
-        subtotal = Number((subtotal + lineTotal).toFixed(2));
-        const discountProduct = discount?.product.trim().toLowerCase();
-        const productMatchesDiscount = Boolean(
-          discount &&
-          (discountProduct === "all products" ||
-            discountProduct === product.sku.toLowerCase() ||
-            discountProduct === product.name.toLowerCase())
-        );
-        const lineDiscount = productMatchesDiscount
-          ? Number((lineTotal * discount.percent / 100).toFixed(2))
-          : 0;
-        if (productMatchesDiscount) discountMatchedProduct = true;
-        discountTotal = Number((discountTotal + lineDiscount).toFixed(2));
-
-        saleItems.push({
-          productId: product._id,
-          sku: product.sku,
-          name: product.name,
+      const settings = await AppSettings.findById("pos").session(session).lean();
+      const pricing = await priceProformaItems({
+        items,
+        customerId: customer?._id || null,
+        discountId,
+        taxTreatment: settings?.taxTreatment || "unconfigured",
+        session,
+      });
+      const subtotal = Number(pricing.subtotal);
+      const discountTotal = Number(pricing.discountTotal);
+      const taxTotal = Number(pricing.taxTotal);
+      const total = Number(pricing.grandTotal);
+      const saleItems = pricing.items.map(item => {
+        const unitPrice = Number(item.unitPrice);
+        return {
+          productId: item.productId,
+          sku: item.sku,
+          name: item.name,
           quantity: item.quantity,
-          unitPrice: product.sellingPrice,
-          lineTotal,
-          discountAmount: lineDiscount,
-        });
-      }
-
-      if (discount && !discountMatchedProduct) {
-        throw Object.assign(new Error("This discount does not apply to any product in the sale."), { status: 400 });
-      }
-
-      const total = Number(Math.max(0, subtotal - discountTotal).toFixed(2));
+          unitPrice,
+          lineTotal: Number((unitPrice * item.quantity).toFixed(2)),
+          discountAmount: Number(item.discountAmount),
+          taxRate: item.taxRate ?? 0,
+          taxAmount: Number(item.taxAmount),
+        };
+      });
       const amountPaid = saleType === "credit" ? 0 : total;
       const balanceDue = saleType === "credit" ? total : 0;
       if (customer && saleType === "credit") {
@@ -201,15 +175,16 @@ router.post("/", async (req, res, next) => {
           items: saleItems,
           subtotal,
           discountTotal,
+          taxTotal,
           total,
           amountPaid,
           balanceDue,
           paymentStatus: saleType === "credit" ? "unpaid" : "paid",
-          appliedDiscounts: discount
+          appliedDiscounts: pricing.discount
             ? [{
-                discountId: discount._id,
-                title: discount.title,
-                percent: discount.percent,
+                discountId: pricing.discount.id,
+                title: pricing.discount.title,
+                percent: pricing.discount.percent,
                 amount: discountTotal,
               }]
             : [],

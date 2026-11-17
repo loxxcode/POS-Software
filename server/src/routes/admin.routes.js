@@ -1,6 +1,8 @@
 import express from "express";
 import mongoose from "mongoose";
 import User from "../models/User.js";
+import Organization from "../models/Organization.js";
+import AuditLog from "../models/AuditLog.js";
 import requireRole from "../middleware/requireRole.js";
 import { hashPassword } from "../utils/passwords.js";
 import { isStaffRole, isValidEmail, normalizeEmail, roles, staffRoles } from "../auth.js";
@@ -8,6 +10,73 @@ import { isStaffRole, isValidEmail, normalizeEmail, roles, staffRoles } from "..
 const router = express.Router();
 
 router.use(requireRole("administration"));
+
+router.get("/organizations", async (_request, response, next) => {
+  try {
+    const data = await Organization.find()
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean();
+    return response.json({ success: true, data });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/organizations", async (request, response, next) => {
+  const { name, branch, manager, location = "" } = request.body || {};
+  if (
+    typeof name !== "string" ||
+    !name.trim() ||
+    name.trim().length > 120 ||
+    typeof branch !== "string" ||
+    !branch.trim() ||
+    branch.trim().length > 120 ||
+    typeof manager !== "string" ||
+    !manager.trim() ||
+    manager.trim().length > 120 ||
+    typeof location !== "string" ||
+    location.trim().length > 160
+  ) {
+    return response.status(400).json({
+      success: false,
+      message: "Enter an organization name, branch, manager, and a valid location.",
+    });
+  }
+
+  try {
+    const data = await Organization.create({
+      name: name.trim(),
+      branch: branch.trim(),
+      manager: manager.trim(),
+      location: location.trim(),
+      createdBy: request.user.email,
+    });
+    return response.status(201).json({ success: true, data });
+  } catch (error) {
+    if (error.code === 11000) {
+      return response.status(409).json({
+        success: false,
+        message: "An organization with this name and branch already exists.",
+      });
+    }
+    return next(error);
+  }
+});
+
+router.get("/audit-logs", async (request, response, next) => {
+  const parsedLimit = Number.parseInt(request.query.limit, 10);
+  const limit = Number.isInteger(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 100;
+  try {
+    const data = await AuditLog.find()
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+    return response.json({ success: true, data });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 router.get("/users", async (request, response, next) => {
   try {

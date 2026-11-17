@@ -2,7 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export default function CameraBarcodeScanner({ onDetected }: { onDetected: (barcode: string) => void }) {
+export default function CameraBarcodeScanner({
+  onDetected,
+  buttonLabel = "Test webcam / scan barcode",
+  activeLabel = "Stop camera test",
+}: {
+  onDetected: (barcode: string) => void;
+  buttonLabel?: string;
+  activeLabel?: string;
+}) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -83,7 +91,7 @@ export default function CameraBarcodeScanner({ onDetected }: { onDetected: (barc
         setOpen(current => !current);
       }}
     >
-      {open ? "Stop camera test" : "Test webcam / scan barcode"}
+      {open ? activeLabel : buttonLabel}
     </button>
     {status && <small className="barcode-camera-status" role="status">{status}</small>}
     {open && <div className="barcode-scanner">

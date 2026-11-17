@@ -12,6 +12,8 @@ const productSchema = new mongoose.Schema(
     },
     name: { type: String, required: true, trim: true },
     barcode: { type: String, trim: true, default: "" },
+    unit: { type: String, trim: true, default: "unit", maxlength: 30 },
+    taxRate: { type: Number, default: null, min: 0, max: 100 },
     itemType: {
       type: String,
       enum: ["book", "stationery", "other"],

@@ -10,7 +10,7 @@ const router = Router();
 router.get("/", async (req, res, next) => {
   try {
     const data = await Product.find({ active: true })
-      .select("sku name barcode itemType category origin stockQty sellingPrice costPrice")
+      .select("sku name barcode unit taxRate itemType category origin stockQty sellingPrice costPrice")
       .sort({ name: 1 })
       .limit(500)
       .lean();
@@ -23,10 +23,9 @@ router.get("/", async (req, res, next) => {
 
 // POST /api/inventory/adjust
 router.post("/adjust", async (req, res, next) => {
-  const { productId, change, reason, note = "" } = req.body;
+  const { productId, change, expectedQuantity, reason, note = "" } = req.body || {};
 
   const validReasons = [
-    "opening_stock",
     "restock",
     "damage",
     "loss",
@@ -37,13 +36,17 @@ router.post("/adjust", async (req, res, next) => {
     !mongoose.isValidObjectId(productId) ||
     !Number.isSafeInteger(change) ||
     change === 0 ||
+    !Number.isSafeInteger(expectedQuantity) ||
+    expectedQuantity < 0 ||
     !validReasons.includes(reason) ||
     typeof note !== "string" ||
-    note.length > 500
+    note.length > 500 ||
+    (reason === "restock" && change < 0) ||
+    ((reason === "damage" || reason === "loss") && change > 0)
   ) {
     return res.status(400).json({
       success: false,
-      message: "Invalid productId, change, reason or note",
+    message: "Choose a valid adjustment reason and direction, product, non-zero change, and note of at most 500 characters.",
     });
   }
 
@@ -62,6 +65,13 @@ router.post("/adjust", async (req, res, next) => {
         throw Object.assign(new Error("Product not found"), {
           status: 404,
         });
+      }
+
+      if (product.stockQty !== expectedQuantity) {
+        throw Object.assign(
+          new Error("Stock changed since you loaded inventory. Review the updated quantity and retry."),
+          { status: 409 }
+        );
       }
 
       const before = product.stockQty;

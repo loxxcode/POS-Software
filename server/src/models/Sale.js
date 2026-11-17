@@ -14,6 +14,8 @@ const saleItemSchema = new mongoose.Schema(
     unitPrice: { type: Number, required: true, min: 0 },
     lineTotal: { type: Number, required: true, min: 0 },
     discountAmount: { type: Number, default: 0, min: 0 },
+    taxRate: { type: Number, default: 0, min: 0, max: 100 },
+    taxAmount: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -22,6 +24,12 @@ const saleSchema = new mongoose.Schema(
   {
     receiptNumber: { type: String, required: true, unique: true },
     clientRequestId: { type: String, required: true, unique: true },
+    proformaId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Proforma",
+    },
+    proformaNumber: { type: String, trim: true, default: null },
+    proformaRevision: { type: Number, min: 1, default: null },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Customer",
@@ -38,6 +46,7 @@ const saleSchema = new mongoose.Schema(
     },
     subtotal: { type: Number, required: true, min: 0 },
     discountTotal: { type: Number, default: 0, min: 0 },
+    taxTotal: { type: Number, default: 0, min: 0 },
     total: { type: Number, required: true, min: 0 },
     amountPaid: { type: Number, default: 0, min: 0 },
     balanceDue: { type: Number, default: 0, min: 0 },
@@ -69,5 +78,9 @@ const saleSchema = new mongoose.Schema(
 
 saleSchema.index({ createdAt: -1 });
 saleSchema.index({ customerId: 1, paymentStatus: 1, createdAt: 1 });
+saleSchema.index(
+  { proformaId: 1 },
+  { unique: true, partialFilterExpression: { proformaId: { $type: "objectId" } } }
+);
 
 export default mongoose.model("Sale", saleSchema);

@@ -15,15 +15,32 @@ import syncRoutes from "./routes/sync.routes.js";
 import customerRoutes from "./routes/customer.routes.js";
 import discountRoutes from "./routes/discount.routes.js";
 import requestRoutes from "./routes/request.routes.js";
+import settingsRoutes from "./routes/settings.routes.js";
+import proformaRoutes from "./routes/proforma.routes.js";
+import auditActivity from "./middleware/auditActivity.js";
+import { expireDueProformas } from "./services/proformaWorkflow.js";
 
 dotenv.config();
 
 const app = express();
+const allowedFrontendOrigins = new Set(
+  (process.env.FRONTEND_URL || "http://localhost:3000")
+    .split(",")
+    .map(origin => origin.trim().replace(/\/$/, ""))
+    .filter(Boolean)
+);
 
 app.use(helmet());
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin(origin, callback) {
+      const localDevelopmentOrigin = process.env.NODE_ENV !== "production" &&
+        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin || "");
+      if (!origin || allowedFrontendOrigins.has(origin) || localDevelopmentOrigin) {
+        return callback(null, true);
+      }
+      return callback(new Error(`CORS origin is not allowed: ${origin}`));
+    },
     credentials: true,
   })
 );
@@ -48,8 +65,10 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+app.use("/api", auditActivity);
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", authenticate, adminRoutes);
+app.use("/api/settings", authenticate, settingsRoutes);
 app.use("/api/products", authenticate, productRoutes);
 app.use("/api/inventory", authenticate, inventoryRoutes);
 app.use("/api/sales", authenticate, saleRoutes);
@@ -57,6 +76,7 @@ app.use("/api/sync", authenticate, syncRoutes);
 app.use("/api/customers", authenticate, customerRoutes);
 app.use("/api/discounts", authenticate, discountRoutes);
 app.use("/api/requests", authenticate, requestRoutes);
+app.use("/api/proformas", authenticate, proformaRoutes);
 
 // Unknown routes
 app.use((req, res) => {
@@ -90,6 +110,15 @@ async function startServer() {
 
     await mongoose.connect(process.env.MONGODB_URI);
     console.log("MongoDB connected successfully");
+
+    const expireProformas = () => {
+      expireDueProformas().catch(error => {
+        console.error("Unable to expire due proformas:", error);
+      });
+    };
+    expireProformas();
+    const expiryTimer = setInterval(expireProformas, 60_000);
+    expiryTimer.unref();
 
     app.listen(PORT, () => {
       console.log(`Server: http://localhost:${PORT}`);

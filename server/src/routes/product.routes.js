@@ -27,6 +27,7 @@ router.get("/", async (req, res, next) => {
         { name: { $regex: term, $options: "i" } },
         { sku: { $regex: term, $options: "i" } },
         { isbn: { $regex: term, $options: "i" } },
+        { barcode: { $regex: term, $options: "i" } },
       ];
     }
 
@@ -46,14 +47,22 @@ router.get("/", async (req, res, next) => {
 router.post("/", async (req, res, next) => {
   try {
     const {
-      sku, name, barcode, itemType, isbn, author, category, origin,
+      sku, name, barcode, unit = "unit", taxRate = null, itemType, isbn, author, category, origin,
       sellingPrice, costPrice, stockQty,
     } = req.body;
 
     if (
       typeof sku !== "string" || !sku.trim() ||
       typeof name !== "string" || !name.trim() ||
-      !Number.isFinite(sellingPrice) || sellingPrice < 0
+      !Number.isFinite(sellingPrice) || sellingPrice < 0 ||
+      Math.abs(sellingPrice * 100 - Math.round(sellingPrice * 100)) > 1e-7 ||
+      typeof unit !== "string" || !unit.trim() || unit.trim().length > 30 ||
+      (taxRate !== null && (
+        !Number.isFinite(taxRate) ||
+        taxRate < 0 ||
+        taxRate > 100 ||
+        Math.abs(taxRate * 100 - Math.round(taxRate * 100)) > 1e-7
+      ))
     ) {
       return res.status(400).json({
         success: false,
@@ -97,7 +106,7 @@ router.post("/", async (req, res, next) => {
       await session.withTransaction(async () => {
         [product] = await Product.create(
           [{
-            sku, name, barcode, itemType, isbn, author, category, origin,
+            sku, name, barcode, unit: unit.trim(), taxRate, itemType, isbn, author, category, origin,
             sellingPrice, costPrice, stockQty,
           }],
           { session }
@@ -134,6 +143,72 @@ router.post("/", async (req, res, next) => {
       });
     }
     next(error);
+  }
+});
+
+// Update product details without changing its stock quantity.
+router.patch("/:id", async (req, res, next) => {
+  const { sku, name, barcode = "", unit = "unit", category = "General", origin = "Local", sellingPrice, costPrice = 0 } = req.body || {};
+  const taxRate = Object.prototype.hasOwnProperty.call(req.body || {}, "taxRate")
+    ? req.body.taxRate
+    : undefined;
+  if (
+    !mongoose.isValidObjectId(req.params.id) ||
+    typeof sku !== "string" ||
+    !sku.trim() ||
+    typeof name !== "string" ||
+    !name.trim() ||
+    typeof barcode !== "string" ||
+    typeof unit !== "string" || !unit.trim() || unit.trim().length > 30 ||
+    (taxRate !== undefined && taxRate !== null && (
+      !Number.isFinite(taxRate) ||
+      taxRate < 0 ||
+      taxRate > 100 ||
+      Math.abs(taxRate * 100 - Math.round(taxRate * 100)) > 1e-7
+    )) ||
+    typeof category !== "string" ||
+    typeof origin !== "string" ||
+    !Number.isFinite(sellingPrice) ||
+    sellingPrice < 0 ||
+    Math.abs(sellingPrice * 100 - Math.round(sellingPrice * 100)) > 1e-7 ||
+    !Number.isFinite(costPrice) ||
+    costPrice < 0
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Enter a valid product ID, code, name, barcode, category, origin, and non-negative prices.",
+    });
+  }
+
+  try {
+    const data = await Product.findOneAndUpdate(
+      { _id: req.params.id, active: true },
+      {
+        $set: {
+          sku: sku.trim(),
+          name: name.trim(),
+          barcode: barcode.trim(),
+          unit: unit.trim(),
+          ...(taxRate !== undefined ? { taxRate } : {}),
+          category: category.trim(),
+          origin: origin.trim(),
+          sellingPrice,
+          costPrice,
+        },
+      },
+      { new: true, runValidators: true }
+    ).lean();
+
+    if (!data) {
+      return res.status(404).json({ success: false, message: "Product not found." });
+    }
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ success: false, message: "A product with this code already exists." });
+    }
+    return next(error);
   }
 });
 
