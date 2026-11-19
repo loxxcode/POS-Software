@@ -59,3 +59,16 @@ test("QuickBooks mapping settings reject duplicate POS tax rates and payment met
     Boolean(error.errors.paymentMethodMappings)
   );
 });
+
+test("QuickBooks mapping settings store company identity metadata", async () => {
+  const settings = new QuickBooksSyncSettings({
+    expectedCompanyName: "Test Company",
+    expectedLegalCompanyName: "Test Company LLC",
+    expectedCompanyCountry: "us",
+    expectedCompanyIdentityKey: "a".repeat(64),
+  });
+
+  await assert.doesNotReject(settings.validate());
+  assert.equal(settings.expectedCompanyCountry, "US");
+  assert.equal(settings.expectedCompanyIdentityKey, "a".repeat(64));
+});

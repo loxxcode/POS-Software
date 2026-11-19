@@ -1,12 +1,10 @@
 
 import { Router } from "express";
 import mongoose from "mongoose";
+import { createHash, randomUUID } from "node:crypto";
 import InventoryLog from "../models/InventoryLog.js";
 import Product from "../models/Product.js";
-import {
-  QuickBooksBridgeError,
-  updateQuickBooksItem,
-} from "../services/quickBooksBridge.js";
+import SyncJob from "../models/SyncJob.js";
 
 const router = Router();
 
@@ -202,13 +200,6 @@ router.patch("/:id", async (req, res, next) => {
       return res.status(409).json({ success: false, message: "A product with this code already exists." });
     }
 
-    if (existing.quickBooksItemListId) {
-      await updateQuickBooksItem(existing.quickBooksItemListId, {
-        name: name.trim(),
-        salesPrice: sellingPrice,
-      });
-    }
-
     const data = await Product.findOneAndUpdate(
       { _id: req.params.id, active: true },
       {
@@ -230,16 +221,27 @@ router.patch("/:id", async (req, res, next) => {
     if (!data) {
       return res.status(404).json({ success: false, message: "Product not found." });
     }
+    if (existing.quickBooksItemListId) {
+      const payloadReference = `update-pos-item:${data._id}`;
+      await SyncJob.create({
+        internalJobId: randomUUID(),
+        operationType: "updateItem",
+        entityType: "item",
+        entityId: data._id,
+        direction: "posToQuickBooks",
+        payloadReference,
+        requestHash: createHash("sha256").update(JSON.stringify({
+          listId: existing.quickBooksItemListId,
+          name: data.name,
+          salesPrice: data.sellingPrice,
+        })).digest("hex"),
+        idempotencyKey: payloadReference,
+        status: "pending",
+      });
+    }
 
     return res.json({ success: true, data });
   } catch (error) {
-    if (error instanceof QuickBooksBridgeError) {
-      return res.status(error.statusCode).json({
-        success: false,
-        code: error.code,
-        message: error.message,
-      });
-    }
     if (error.code === 11000) {
       return res.status(409).json({ success: false, message: "A product with this code already exists." });
     }

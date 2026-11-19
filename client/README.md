@@ -80,6 +80,23 @@ Conversion to cash, card, or other payment requires staff confirmation that paym
 
 Run backend unit checks from the `server` directory with `npm test`; run client checks from `client` with `npm test` and `npm run build`.
 
+## QuickBooks Desktop setup and reconciliation
+
+Copy `server/.env.example` to `server/.env`, replace placeholders, remove duplicate `QB_BRIDGE_*` entries, and set `QBFC_SDK_COUNTRY` to the two-letter locale of the installed QuickBooks edition.
+
+Build and start the read-only local bridge from the repository root:
+
+```powershell
+& "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe" `
+  "quickbooks-bridge\QuickBooksBridge.csproj" /p:Configuration=Release /p:Platform=x64
+
+node .\quickbooks-bridge\start-bridge.js
+```
+
+Keep QuickBooks Desktop open in the same Windows user session and verify the company before running catalog or reconciliation operations. Administration → Settings includes QuickBooks mapping and synchronization reconciliation.
+
+Transaction synchronization is not enabled. The reconciliation panel only displays durable outbox jobs and lets an administrator enter a QuickBooks TxnID already confirmed inside QuickBooks. It does not create transactions or blindly retry unknown outcomes.
+
 ## Suggested production architecture
 - Frontend: Next.js + TypeScript
 - API: Node.js + Express

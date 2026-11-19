@@ -3,11 +3,8 @@ import mongoose from "mongoose";
 import Customer from "../models/Customer.js";
 import CustomerPayment from "../models/CustomerPayment.js";
 import Sale from "../models/Sale.js";
-import {
-  createQuickBooksCustomer,
-  QuickBooksBridgeError,
-  updateQuickBooksCustomer,
-} from "../services/quickBooksBridge.js";
+import SyncJob from "../models/SyncJob.js";
+import { randomUUID, createHash } from "node:crypto";
 
 const router = Router();
 
@@ -35,12 +32,6 @@ router.post("/", async (req, res, next) => {
   }
 
   try {
-    const quickBooksCustomer = await createQuickBooksCustomer({
-      name: name.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
-      address: address.trim(),
-    });
     const data = await Customer.create({
       name,
       email,
@@ -48,17 +39,22 @@ router.post("/", async (req, res, next) => {
       tin,
       credit,
       address,
-      quickBooksListId: quickBooksCustomer.listId,
+      quickBooksListId: null,
+    });
+    const payloadReference = `pos-customer:${data._id}`;
+    await SyncJob.create({
+      internalJobId: randomUUID(),
+      operationType: "createCustomer",
+      entityType: "customer",
+      entityId: data._id,
+      direction: "posToQuickBooks",
+      payloadReference,
+      requestHash: createHash("sha256").update(payloadReference).digest("hex"),
+      idempotencyKey: payloadReference,
+      status: "pending",
     });
     res.status(201).json({ success: true, data });
   } catch (error) {
-    if (error instanceof QuickBooksBridgeError) {
-      return res.status(error.statusCode).json({
-        success: false,
-        code: error.code,
-        message: error.message,
-      });
-    }
     next(error);
   }
 });
@@ -174,6 +170,21 @@ router.post("/:id/payments", async (req, res, next) => {
         }],
         { session }
       );
+      const payloadReference = `pos-payment:${payment._id}`;
+      await SyncJob.create(
+        [{
+          internalJobId: randomUUID(),
+          operationType: "createReceivePayment",
+          entityType: "customerPayment",
+          entityId: payment._id,
+          direction: "posToQuickBooks",
+          payloadReference,
+          requestHash: createHash("sha256").update(payloadReference).digest("hex"),
+          idempotencyKey: payloadReference,
+          status: "pending",
+        }],
+        { session }
+      );
       result = {
         payment,
         customer,
@@ -233,12 +244,6 @@ router.patch("/:id", async (req, res, next) => {
           message: "Mapped QuickBooks customers require a name of at most 41 characters and an address of at most 205 characters.",
         });
       }
-      await updateQuickBooksCustomer(existing.quickBooksListId, {
-        name: name.trim(),
-        email: email.trim(),
-        phone: phone.trim(),
-        address: address.trim(),
-      });
     }
 
     const data = await Customer.findByIdAndUpdate(
@@ -247,15 +252,28 @@ router.patch("/:id", async (req, res, next) => {
       { new: true, runValidators: true }
     );
     if (!data) return res.status(404).json({ success: false, message: "Customer not found." });
-    res.json({ success: true, data });
-  } catch (error) {
-    if (error instanceof QuickBooksBridgeError) {
-      return res.status(error.statusCode).json({
-        success: false,
-        code: error.code,
-        message: error.message,
+    if (existing.quickBooksListId) {
+      const payloadReference = `update-pos-customer:${data._id}`;
+      await SyncJob.create({
+        internalJobId: randomUUID(),
+        operationType: "updateCustomer",
+        entityType: "customer",
+        entityId: data._id,
+        direction: "posToQuickBooks",
+        payloadReference,
+        requestHash: createHash("sha256").update(JSON.stringify({
+          listId: existing.quickBooksListId,
+          name: data.name,
+          email: data.email,
+          phone: data.phone,
+          address: data.address,
+        })).digest("hex"),
+        idempotencyKey: payloadReference,
+        status: "pending",
       });
     }
+    res.json({ success: true, data });
+  } catch (error) {
     next(error);
   }
 });

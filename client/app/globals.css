@@ -584,6 +584,12 @@ select:focus, input:focus { border-color: #7d98e5; box-shadow: 0 0 0 2px #e6ecff
 .qb-mapping-empty { margin: 0; color: #858c9a; font-size: 10px; }
 .qb-mapping-warning { margin: 0; padding: 9px 11px; border: 1px solid #f1d8a8; border-radius: 5px; color: #795019; background: #fff8e9; font-size: 10px; line-height: 1.5; }
 .qb-mapping-status { margin: 0; padding: 8px 10px; border: 1px solid #e4e9f2; border-radius: 5px; color: #586274; background: #f8faff; font-size: 10px; line-height: 1.5; }
+.qb-sync-reconciliation { min-width: 0; display: grid; gap: 10px; padding: 13px; border: 1px solid #dfe7f5; border-radius: 7px; background: #f8faff; }
+.qb-sync-table-wrap { max-height: 320px; overflow: auto; border: 1px solid #e7ebf2; border-radius: 6px; background: #fff; }
+.qb-sync-table-wrap small { display: block; margin-top: 3px; color: #828b9a; font-size: 8px; }
+.qb-reconcile-form { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(120px, .8fr) auto; gap: 6px; min-width: 310px; }
+.qb-reconcile-form input, .qb-reconcile-form select { width: 100%; height: 30px; }
+.qb-reconcile-form .button { min-height: 30px; }
 .qb-auto-match { min-width: 0; display: grid; gap: 10px; padding: 13px; border: 1px solid #dfe7f5; border-radius: 7px; background: #f8faff; }
 .qb-auto-match .qb-catalog-heading p { max-width: 1000px; line-height: 1.55; }
 .qb-auto-match-actions { display: flex; flex-wrap: wrap; gap: 7px; }
@@ -776,6 +782,7 @@ select:focus, input:focus { border-color: #7d98e5; box-shadow: 0 0 0 2px #e6ecff
   .audit-filters { width: 100%; flex-direction: column; align-items: stretch; }
   .admin-settings-layout { grid-template-columns: 1fr; }
   .qb-mapping-heading { align-items: flex-start; flex-direction: column; }
+  .qb-reconcile-form { min-width: 0; grid-template-columns: 1fr; }
   .qb-mapping-grid { grid-template-columns: 1fr; }
   .qb-auto-match-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .qb-auto-match-actions .button { flex: 1; }

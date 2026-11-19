@@ -149,7 +149,10 @@ namespace LibraryPos.QuickBooksBridge
                     200,
                     "{\"success\":true,\"data\":{\"companyName\":\"" +
                     Program.EscapeJson(company.Name) +
+                    "\",\"legalCompanyName\":\"" + Program.EscapeJson(company.LegalName) +
                     "\",\"country\":\"" + Program.EscapeJson(company.Country) +
+                    "\",\"isSampleCompany\":" + (company.IsSampleCompany ? "true" : "false") +
+                    ",\"companyIdentityKey\":\"" + Program.EscapeJson(company.IdentityKey) +
                     "\",\"qbxmlVersion\":\"" + Program.EscapeJson(company.QbxmlVersion) + "\"}}"
                 );
                 return;

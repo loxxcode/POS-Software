@@ -69,7 +69,17 @@ test("QuickBooks bridge client authenticates to loopback and parses only known o
         salesReceiptsEnabled: false,
       }));
     } else if (request.url === "/quickbooks/company") {
-      response.end(JSON.stringify({ success: true, data: { country: "US", qbxmlVersion: "16.0" } }));
+      response.end(JSON.stringify({
+        success: true,
+        data: {
+          companyName: "Test Company",
+          legalCompanyName: "Test Company LLC",
+          country: "US",
+          isSampleCompany: false,
+          companyIdentityKey: "a".repeat(64),
+          qbxmlVersion: "16.0",
+        },
+      }));
     } else if (request.url === "/quickbooks/preferences") {
       response.end(JSON.stringify({
         success: true,
@@ -119,7 +129,14 @@ test("QuickBooks bridge client authenticates to loopback and parses only known o
     assert.equal(health.status, "ready");
     assert.deepEqual(capabilities.operations, ["companyQuery", "preferencesQuery", "catalogsQuery"]);
     assert.equal(capabilities.salesReceiptsEnabled, false);
-    assert.deepEqual(company, { country: "US", qbxmlVersion: "16.0" });
+    assert.deepEqual(company, {
+      companyName: "Test Company",
+      legalCompanyName: "Test Company LLC",
+      country: "US",
+      isSampleCompany: false,
+      companyIdentityKey: "a".repeat(64),
+      qbxmlVersion: "16.0",
+    });
     assert.deepEqual(preferences, {
       multiCurrencyEnabled: true,
       homeCurrencyReferenceAvailable: true,

@@ -45,6 +45,31 @@ const paymentMethodMappingSchema = new mongoose.Schema(
 const quickBooksSyncSettingsSchema = new mongoose.Schema(
   {
     _id: { type: String, default: "default" },
+    expectedCompanyName: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: 120,
+    },
+    expectedLegalCompanyName: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: 120,
+    },
+    expectedCompanyCountry: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+      maxlength: 2,
+    },
+    expectedCompanyIdentityKey: {
+      type: String,
+      trim: true,
+      default: null,
+      maxlength: 64,
+    },
     accountsReceivableAccountListId: {
       type: String,
       trim: true,

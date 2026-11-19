@@ -81,6 +81,21 @@ type MappingConfig = {
   paymentMethodMappings: PaymentMapping[];
 };
 type ApiEnvelope<T> = { success: boolean; data: T; message?: string };
+type SyncJob = {
+  _id: string;
+  internalJobId?: string;
+  operationType?: string;
+  status: string;
+  attempts: number;
+  idempotencyKey?: string | null;
+  quickBooksTxnId?: string | null;
+  quickBooksTxnType?: string | null;
+  lastErrorCode?: string | null;
+  lastError?: string | null;
+  nextAttemptAt?: string | null;
+  createdAt?: string;
+  saleId?: { receiptNumber?: string } | string | null;
+};
 
 const apiBaseUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000").replace(/\/$/, "");
 const methods: PaymentMapping["posPaymentMethod"][] = ["cash", "card", "mobile_money", "other"];
@@ -253,6 +268,45 @@ function optionLabel(entry: CatalogEntry) {
   return `${name} · ${entry.listId}`;
 }
 
+function ReconcileForm({
+  job,
+  reconcile,
+  disabled,
+}: {
+  job: SyncJob;
+  reconcile: (job: SyncJob, quickBooksTxnId: string, quickBooksTxnType: string) => Promise<void>;
+  disabled: boolean;
+}) {
+  const [txnId, setTxnId] = useState(job.quickBooksTxnId || "");
+  const [txnType, setTxnType] = useState(job.quickBooksTxnType || "SalesReceipt");
+  return <div className="qb-reconcile-form">
+    <input
+      aria-label={`QuickBooks transaction ID for ${job.internalJobId || job._id}`}
+      placeholder="Confirmed TxnID"
+      value={txnId}
+      onChange={event => setTxnId(event.target.value)}
+      maxLength={100}
+    />
+    <select
+      aria-label={`QuickBooks transaction type for ${job.internalJobId || job._id}`}
+      value={txnType}
+      onChange={event => setTxnType(event.target.value)}
+    >
+      <option value="SalesReceipt">Sales Receipt</option>
+      <option value="Invoice">Invoice</option>
+      <option value="ReceivePayment">Receive Payment</option>
+    </select>
+    <button
+      type="button"
+      className="button button-blue"
+      disabled={disabled || !txnId.trim()}
+      onClick={() => void reconcile(job, txnId, txnType)}
+    >
+      CONFIRM
+    </button>
+  </div>;
+}
+
 export default function QuickBooksMappingSettings() {
   const [preferences, setPreferences] = useState<Preferences | null>(null);
   const [preferencesError, setPreferencesError] = useState("");
@@ -287,6 +341,10 @@ export default function QuickBooksMappingSettings() {
   const [matchApplying, setMatchApplying] = useState(false);
   const [matchError, setMatchError] = useState("");
   const [matchNotice, setMatchNotice] = useState("");
+  const [syncJobs, setSyncJobs] = useState<SyncJob[]>([]);
+  const [syncJobsLoading, setSyncJobsLoading] = useState(false);
+  const [syncJobsError, setSyncJobsError] = useState("");
+  const [syncJobsNotice, setSyncJobsNotice] = useState("");
 
   const salesItems = useMemo(
     () => catalogs?.items.filter(item =>
@@ -467,9 +525,52 @@ export default function QuickBooksMappingSettings() {
     }
   }
 
+  async function loadSyncJobs() {
+    setSyncJobsLoading(true);
+    setSyncJobsError("");
+    try {
+      const data = await request<unknown>("/api/sync/jobs");
+      if (!isRecord(data) || !Array.isArray(data) || !data.every(job =>
+        isRecord(job) &&
+        typeof job._id === "string" &&
+        typeof job.status === "string" &&
+        typeof job.attempts === "number"
+      )) {
+        throw new Error("The server returned an invalid synchronization job list.");
+      }
+      setSyncJobs(data as unknown as SyncJob[]);
+    } catch (error) {
+      setSyncJobsError(error instanceof Error ? error.message : "Unable to load synchronization jobs.");
+    } finally {
+      setSyncJobsLoading(false);
+    }
+  }
+
+  async function reconcileSyncJob(job: SyncJob, quickBooksTxnId: string, quickBooksTxnType: string) {
+    setSyncJobsLoading(true);
+    setSyncJobsError("");
+    setSyncJobsNotice("");
+    try {
+      await request<unknown>(`/api/sync/jobs/${encodeURIComponent(job._id)}/reconcile`, {
+        method: "POST",
+        body: JSON.stringify({
+          quickBooksTxnId: quickBooksTxnId.trim() || null,
+          quickBooksTxnType: quickBooksTxnType.trim() || null,
+          note: "Administrator confirmed QuickBooks transaction reference.",
+        }),
+      });
+      setSyncJobsNotice(`Reconciliation saved for job ${job.internalJobId || job._id}.`);
+      await loadSyncJobs();
+    } catch (error) {
+      setSyncJobsError(error instanceof Error ? error.message : "Unable to reconcile synchronization job.");
+      setSyncJobsLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadProductPage(1, "");
     loadCustomerPage(1, "");
+    void loadSyncJobs();
   }, []);
 
   async function saveProductMapping(product: ProductMapping) {
@@ -594,6 +695,43 @@ export default function QuickBooksMappingSettings() {
     {catalogs && <p className="qb-mapping-status">
       Loaded active QuickBooks lists: {catalogs.items.length} items, {catalogs.customers.length} customers, {catalogs.salesTaxCodes.length} tax codes, {catalogs.salesTaxItems.length} tax items, {catalogs.paymentMethods.length} payment methods, {catalogs.accounts.length} accounts.
     </p>}
+    <section className="qb-sync-reconciliation" aria-label="QuickBooks synchronization reconciliation">
+      <div className="qb-catalog-heading">
+        <h4>Synchronization reconciliation</h4>
+        <p>Pending jobs are local accounting outbox records. An unknown outcome or timeout requires manual confirmation in QuickBooks; this panel never guesses or blindly retries a transaction.</p>
+      </div>
+      <div className="qb-auto-match-actions">
+        <button type="button" className="button button-outline" onClick={() => void loadSyncJobs()} disabled={syncJobsLoading}>
+          {syncJobsLoading ? "REFRESHING…" : "REFRESH JOBS"}
+        </button>
+      </div>
+      {syncJobsError && <p className="login-error" role="alert">{syncJobsError}</p>}
+      {syncJobsNotice && <p className="qb-mapping-success" role="status">{syncJobsNotice}</p>}
+      {syncJobsLoading && syncJobs.length === 0 && <p className="qb-mapping-empty">Loading synchronization jobs…</p>}
+      {!syncJobsLoading && syncJobs.length === 0 && <p className="qb-mapping-empty">No synchronization jobs found.</p>}
+      {syncJobs.length > 0 && <div className="qb-sync-table-wrap">
+        <table className="qb-catalog-table">
+          <thead><tr><th>Job</th><th>Operation</th><th>Status</th><th>Attempts</th><th>Accounting reference</th><th>Action</th></tr></thead>
+          <tbody>
+            {syncJobs.map(job => {
+              const unresolved = ["pending", "retryable_failed", "outcome_unknown", "permanent_failed", "requires_review", "failed", "needs_review"].includes(job.status);
+              return <tr key={job._id}>
+                <td>{job.internalJobId || job._id}<small>{job.saleId && typeof job.saleId === "object" ? job.saleId.receiptNumber : "POS entity"}</small></td>
+                <td>{job.operationType || "unknown"}</td>
+                <td>{job.status}<small>{job.lastErrorCode || job.lastError || ""}</small></td>
+                <td>{job.attempts}</td>
+                <td>{job.quickBooksTxnId || "Not confirmed"}</td>
+                <td>
+                  {unresolved
+                    ? <ReconcileForm job={job} reconcile={reconcileSyncJob} disabled={syncJobsLoading} />
+                    : "Confirmed"}
+                </td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>}
+    </section>
     <section className="qb-auto-match" aria-label="Match POS data with QuickBooks">
       <div className="qb-catalog-heading">
         <h4>Match POS data with QuickBooks</h4>

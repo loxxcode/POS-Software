@@ -61,6 +61,7 @@ namespace LibraryPos.QuickBooksBridge
                     "{\"success\":true,\"code\":\"COMPANY_QUERY_OK\",\"qbfcVersion\":\"" +
                     EscapeJson(interopVersion == null ? "unknown" : interopVersion.ToString()) +
                     "\",\"qbxmlVersion\":\"" + EscapeJson(company.QbxmlVersion) +
+                    "\",\"companyIdentityKey\":\"" + EscapeJson(company.IdentityKey) +
                     "\",\"companyDataReturned\":true}"
                 );
                 return 0;

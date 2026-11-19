@@ -1,7 +1,7 @@
 
 import { Router } from "express";
 import mongoose from "mongoose";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import Customer from "../models/Customer.js";
 import Product from "../models/Product.js";
 import Sale from "../models/Sale.js";
@@ -198,7 +198,18 @@ router.post("/", async (req, res, next) => {
       sale.quickBooksRequestId = quickBooksRequestId;
       await sale.save({ session });
       await SyncJob.create(
-        [{ saleId: sale._id, idempotencyKey: quickBooksRequestId, status: "pending" }],
+        [{
+          saleId: sale._id,
+          internalJobId: randomUUID(),
+          operationType: "createSalesReceipt",
+          entityType: "sale",
+          entityId: sale._id,
+          direction: "posToQuickBooks",
+          payloadReference: quickBooksRequestId,
+          requestHash: createHash("sha256").update(quickBooksRequestId).digest("hex"),
+          idempotencyKey: quickBooksRequestId,
+          status: "pending",
+        }],
         { session }
       );
 

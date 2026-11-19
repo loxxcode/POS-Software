@@ -3,21 +3,62 @@ import mongoose from "mongoose";
 
 const syncJobSchema = new mongoose.Schema(
   {
+    internalJobId: {
+      type: String,
+      trim: true,
+      unique: true,
+      sparse: true,
+      maxlength: 120,
+    },
+    operationType: {
+      type: String,
+      enum: ["createCustomer", "createSalesReceipt", "createInvoice", "createReceivePayment", "updateCustomer", "updateItem"],
+      default: "createSalesReceipt",
+    },
+    entityType: {
+      type: String,
+      enum: ["sale", "customerPayment", "customer", "item"],
+      default: "sale",
+    },
+    entityId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+      index: true,
+    },
+    direction: {
+      type: String,
+      enum: ["posToQuickBooks", "quickBooksToPos"],
+      default: "posToQuickBooks",
+    },
+    payloadReference: { type: String, trim: true, default: null, maxlength: 120 },
+    requestHash: { type: String, trim: true, default: null, maxlength: 64 },
     saleId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Sale",
-      required: true,
-      unique: true,
+      default: null,
     },
     idempotencyKey: { type: String, trim: true, default: null, maxlength: 120 },
     status: {
       type: String,
-      enum: ["pending", "processing", "synced", "failed", "needs_review"],
+      enum: [
+        "pending",
+        "processing",
+        "succeeded",
+        "synced",
+        "retryable_failed",
+        "failed",
+        "permanent_failed",
+        "outcome_unknown",
+        "requires_review",
+        "needs_review",
+      ],
       default: "pending",
       index: true,
     },
     attempts: { type: Number, default: 0, min: 0 },
     lastAttemptAt: { type: Date, default: null },
+    nextAttemptAt: { type: Date, default: null, index: true },
+    lastErrorCode: { type: String, trim: true, default: null, maxlength: 100 },
     claimToken: { type: String, default: null, maxlength: 120 },
     claimedAt: { type: Date, default: null },
     quickBooksTxnType: {

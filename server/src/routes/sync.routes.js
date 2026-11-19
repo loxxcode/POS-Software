@@ -17,6 +17,11 @@ import {
   updateQuickBooksItem,
 } from "../services/quickBooksBridge.js";
 import { buildQuickBooksAutoMatchPlan } from "../services/quickBooksAutoMatch.js";
+import { importQuickBooksCatalog } from "../services/quickBooksMirrorImport.js";
+import QuickBooksImportCheckpoint from "../models/QuickBooksImportCheckpoint.js";
+import {
+  reconcileSyncJob,
+} from "../services/quickBooksSyncWorker.js";
 
 const router = Router();
 const paymentMethods = ["cash", "card", "mobile_money", "other"];
@@ -133,9 +138,142 @@ function matchFieldLimits(match) {
 
 router.get("/quickbooks/health", requireRole("administration"), bridgeRoute(getQuickBooksBridgeHealth));
 router.get("/quickbooks/capabilities", requireRole("administration"), bridgeRoute(getQuickBooksBridgeCapabilities));
-router.get("/quickbooks/company", requireRole("administration"), bridgeRoute(getQuickBooksCompany));
+router.get("/quickbooks/company", requireRole("administration"), async (_request, response, next) => {
+  try {
+    const company = await getQuickBooksCompany();
+    const settings = await getOrCreateQuickBooksSettings();
+    const mismatches = [];
+
+    if (settings.expectedCompanyName &&
+      company.companyName !== settings.expectedCompanyName) {
+      mismatches.push("companyName");
+    }
+    if (settings.expectedLegalCompanyName &&
+      company.legalCompanyName !== settings.expectedLegalCompanyName) {
+      mismatches.push("legalCompanyName");
+    }
+    if (settings.expectedCompanyCountry &&
+      company.country !== settings.expectedCompanyCountry) {
+      mismatches.push("country");
+    }
+    if (settings.expectedCompanyIdentityKey &&
+      company.companyIdentityKey !== settings.expectedCompanyIdentityKey) {
+      mismatches.push("companyIdentityKey");
+    }
+
+    if (mismatches.length > 0) {
+      return response.status(409).json({
+        success: false,
+        code: "QUICKBOOKS_COMPANY_MISMATCH",
+        message: "The open QuickBooks company does not match the configured POS company.",
+        mismatches,
+      });
+    }
+
+    return response.json({
+      success: true,
+      data: {
+        ...company,
+        companyVerified: Boolean(
+          settings.expectedCompanyIdentityKey ||
+          settings.expectedCompanyName ||
+          settings.expectedLegalCompanyName ||
+          settings.expectedCompanyCountry
+        ),
+      },
+    });
+  } catch (error) {
+    if (error instanceof QuickBooksBridgeError) {
+      return response.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
+    return next(error);
+  }
+});
 router.get("/quickbooks/preferences", requireRole("administration"), bridgeRoute(getQuickBooksPreferences));
 router.get("/quickbooks/catalogs", requireRole("administration"), bridgeRoute(getQuickBooksCatalogs));
+
+router.post("/quickbooks/mirror/import", requireRole("administration"), async (_request, response, next) => {
+  try {
+    const [company, catalogs, settings] = await Promise.all([
+      getQuickBooksCompany(),
+      getQuickBooksCatalogs(),
+      getOrCreateQuickBooksSettings(),
+    ]);
+    const mismatches = [];
+    if (settings.expectedCompanyName && company.companyName !== settings.expectedCompanyName) mismatches.push("companyName");
+    if (settings.expectedLegalCompanyName && company.legalCompanyName !== settings.expectedLegalCompanyName) mismatches.push("legalCompanyName");
+    if (settings.expectedCompanyCountry && company.country !== settings.expectedCompanyCountry) mismatches.push("country");
+    if (settings.expectedCompanyIdentityKey && company.companyIdentityKey !== settings.expectedCompanyIdentityKey) mismatches.push("companyIdentityKey");
+    if (mismatches.length) {
+      return response.status(409).json({
+        success: false,
+        code: "QUICKBOOKS_COMPANY_MISMATCH",
+        message: "The open QuickBooks company does not match the configured POS company.",
+        mismatches,
+      });
+    }
+
+    const truncatedKeys = Object.entries(catalogs.truncated || {})
+      .filter(([, truncated]) => truncated)
+      .map(([key]) => key);
+    if (truncatedKeys.length) {
+      await QuickBooksImportCheckpoint.findOneAndUpdate(
+        { operation: "initialCatalogImport" },
+        {
+          $set: {
+            companyIdentityKey: company.companyIdentityKey,
+            status: "failed",
+            truncated: Object.fromEntries(
+              ["items", "customers", "salesTaxCodes", "salesTaxItems", "paymentMethods", "accounts"]
+                .map(key => [key, Boolean(catalogs.truncated?.[key])])
+            ),
+            lastErrorCode: "CATALOG_TRUNCATED",
+            lastError: "The QuickBooks catalog is truncated; no partial initial mirror was accepted.",
+          },
+        },
+        { upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      );
+      return response.status(409).json({
+        success: false,
+        code: "CATALOG_TRUNCATED",
+        message: "The QuickBooks catalog is truncated. Retry after QuickBooks and the bridge can return the complete supported catalog.",
+        truncatedKeys,
+      });
+    }
+
+    const result = await importQuickBooksCatalog({
+      company,
+      catalogs,
+      operation: "initialCatalogImport",
+    });
+    return response.status(result.status === "completed" ? 200 : 502).json({
+      success: result.status === "completed",
+      data: result,
+    });
+  } catch (error) {
+    if (error instanceof QuickBooksBridgeError) {
+      return response.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
+    return next(error);
+  }
+});
+
+router.get("/quickbooks/mirror/import-status", requireRole("administration"), async (_request, response, next) => {
+  try {
+    const data = await QuickBooksImportCheckpoint.findOne({ operation: "initialCatalogImport" }).lean();
+    return response.json({ success: true, data: data || null });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 router.post("/quickbooks/mappings/auto-match/preview", requireRole("administration"), async (_request, response, next) => {
   try {
@@ -421,13 +559,26 @@ router.patch("/quickbooks/mappings/config", requireRole("administration"), async
     accountsReceivableAccountListId,
     taxRateMappings,
     paymentMethodMappings,
+    expectedCompanyName,
+    expectedLegalCompanyName,
+    expectedCompanyCountry,
+    expectedCompanyIdentityKey,
   } = request.body || {};
   if (
     !isValidListId(accountsReceivableAccountListId, true) ||
     !Array.isArray(taxRateMappings) ||
     taxRateMappings.length > 100 ||
     !Array.isArray(paymentMethodMappings) ||
-    paymentMethodMappings.length > paymentMethods.length
+    paymentMethodMappings.length > paymentMethods.length ||
+    (typeof expectedCompanyName !== "undefined" && typeof expectedCompanyName !== "string") ||
+    (typeof expectedLegalCompanyName !== "undefined" && typeof expectedLegalCompanyName !== "string") ||
+    (typeof expectedCompanyCountry !== "undefined" &&
+      (typeof expectedCompanyCountry !== "string" ||
+        (expectedCompanyCountry.trim() !== "" && !/^[A-Za-z]{2}$/.test(expectedCompanyCountry.trim())))) ||
+    (typeof expectedCompanyIdentityKey !== "undefined" &&
+      (typeof expectedCompanyIdentityKey !== "string" ||
+        (expectedCompanyIdentityKey.trim() !== "" &&
+          !/^[a-fA-F0-9]{64}$/.test(expectedCompanyIdentityKey.trim()))))
   ) {
     return response.status(400).json({ success: false, message: "Enter valid receivables, tax-rate, and payment-method mappings." });
   }
@@ -492,6 +643,18 @@ router.patch("/quickbooks/mappings/config", requireRole("administration"), async
             : null,
           taxRateMappings: normalizedTaxMappings,
           paymentMethodMappings: normalizedPaymentMappings,
+          ...(typeof expectedCompanyName === "string"
+            ? { expectedCompanyName: expectedCompanyName.trim().slice(0, 120) }
+            : {}),
+          ...(typeof expectedLegalCompanyName === "string"
+            ? { expectedLegalCompanyName: expectedLegalCompanyName.trim().slice(0, 120) }
+            : {}),
+          ...(typeof expectedCompanyCountry === "string"
+            ? { expectedCompanyCountry: expectedCompanyCountry.trim().toUpperCase().slice(0, 2) }
+            : {}),
+          ...(typeof expectedCompanyIdentityKey === "string"
+            ? { expectedCompanyIdentityKey: expectedCompanyIdentityKey.trim() || null }
+            : {}),
           updatedBy: request.user.email,
         },
       },
@@ -506,7 +669,18 @@ router.patch("/quickbooks/mappings/config", requireRole("administration"), async
 // GET /api/sync/jobs?status=pending
 router.get("/jobs", async (req, res, next) => {
   try {
-    const allowed = ["pending", "processing", "synced", "failed", "needs_review"];
+    const allowed = [
+      "pending",
+      "processing",
+      "succeeded",
+      "synced",
+      "retryable_failed",
+      "failed",
+      "permanent_failed",
+      "outcome_unknown",
+      "requires_review",
+      "needs_review",
+    ];
     const filter = {};
 
     if (req.query.status) {
@@ -557,6 +731,46 @@ router.get("/jobs/:id", async (req, res, next) => {
     res.json({ success: true, data });
   } catch (error) {
     next(error);
+  }
+});
+
+router.post("/jobs/:id/reconcile", requireRole("administration"), async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid sync job ID." });
+    }
+    const {
+      quickBooksTxnId,
+      quickBooksTxnType,
+      note = "",
+    } = req.body || {};
+    if (
+      quickBooksTxnId !== null &&
+      (typeof quickBooksTxnId !== "string" || quickBooksTxnId.trim().length > 100)
+    ) {
+      return res.status(400).json({ success: false, message: "quickBooksTxnId must be null or a valid string." });
+    }
+    if (
+      quickBooksTxnType !== null &&
+      typeof quickBooksTxnType !== "string"
+    ) {
+      return res.status(400).json({ success: false, message: "quickBooksTxnType must be null or a valid transaction type." });
+    }
+    if (typeof note !== "string" || note.length > 1000) {
+      return res.status(400).json({ success: false, message: "Note must be at most 1000 characters." });
+    }
+
+    const data = await reconcileSyncJob(req.params.id, {
+      saleQuickBooksTxnId: typeof quickBooksTxnId === "string" ? quickBooksTxnId.trim() || null : null,
+      saleQuickBooksTxnType: typeof quickBooksTxnType === "string" ? quickBooksTxnType.trim() || null : null,
+      note,
+    });
+    if (!data) {
+      return res.status(404).json({ success: false, message: "Sync job not found." });
+    }
+    return res.json({ success: true, data });
+  } catch (error) {
+    return next(error);
   }
 });
 

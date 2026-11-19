@@ -1,21 +1,49 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using Interop.QBFC18;
 
 namespace LibraryPos.QuickBooksBridge
 {
     internal sealed class CompanyInfo
     {
-        internal CompanyInfo(string name, string country, string qbxmlVersion)
+        internal CompanyInfo(string name, string legalName, string country, bool isSampleCompany, string qbxmlVersion)
         {
             Name = name;
+            LegalName = legalName;
             Country = country;
+            IsSampleCompany = isSampleCompany;
             QbxmlVersion = qbxmlVersion;
+            IdentityKey = ComputeIdentityKey(name, legalName, country, isSampleCompany);
         }
 
         internal string Name { get; private set; }
+        internal string LegalName { get; private set; }
         internal string Country { get; private set; }
+        internal bool IsSampleCompany { get; private set; }
         internal string QbxmlVersion { get; private set; }
+        internal string IdentityKey { get; private set; }
+
+        private static string ComputeIdentityKey(string name, string legalName, string country, bool isSampleCompany)
+        {
+            string source = String.Join("|", new string[] {
+                name ?? "",
+                legalName ?? "",
+                country ?? "",
+                isSampleCompany ? "sample" : "company"
+            });
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] digest = sha.ComputeHash(Encoding.UTF8.GetBytes(source));
+                StringBuilder hex = new StringBuilder(64);
+                foreach (byte value in digest)
+                {
+                    hex.Append(value.ToString("x2"));
+                }
+                return hex.ToString();
+            }
+        }
     }
 
     internal sealed class QuickBooksBridgeException : Exception
@@ -47,7 +75,9 @@ namespace LibraryPos.QuickBooksBridge
             ICompanyRet company = null;
             IAddress address = null;
             IQBStringType companyName = null;
+            IQBStringType legalCompanyName = null;
             IQBStringType country = null;
+            IQBBoolType isSampleCompany = null;
             bool connectionOpened = false;
             bool sessionBegun = false;
 
@@ -112,6 +142,13 @@ namespace LibraryPos.QuickBooksBridge
                     nameValue = companyName.GetValue();
                 }
 
+                string legalNameValue = "";
+                legalCompanyName = company.LegalCompanyName;
+                if (legalCompanyName != null && legalCompanyName.IsSet())
+                {
+                    legalNameValue = legalCompanyName.GetValue();
+                }
+
                 string countryValue = "";
                 address = company.Address;
                 if (address != null)
@@ -123,7 +160,14 @@ namespace LibraryPos.QuickBooksBridge
                     }
                 }
 
-                return new CompanyInfo(nameValue, countryValue, qbxmlVersion);
+                bool sampleCompany = false;
+                isSampleCompany = company.IsSampleCompany;
+                if (isSampleCompany != null && isSampleCompany.IsSet())
+                {
+                    sampleCompany = isSampleCompany.GetValue();
+                }
+
+                return new CompanyInfo(nameValue, legalNameValue, countryValue, sampleCompany, qbxmlVersion);
             }
             catch (QuickBooksBridgeException)
             {
@@ -175,6 +219,8 @@ namespace LibraryPos.QuickBooksBridge
                 ReleaseAll(
                     country,
                     companyName,
+                    legalCompanyName,
+                    isSampleCompany,
                     address,
                     company,
                     response,

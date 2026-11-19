@@ -33,6 +33,8 @@ Build the x64 bridge from the repository root:
 
 Keep QuickBooks Desktop open to the company file and dismiss any modal dialogs before loading lists; QBFC cannot access the company while a modal window is open. Run the launcher in the same user session as QuickBooks. The POS administrator can load the lists from **Settings → QuickBooks Desktop mapping setup**. The catalog query returns active names and ListIDs, tax-code flags/rates, payment methods, and account types; it does not return balances, transactions, customer contact details, or credentials.
 
+The read-only company query returns the company name, legal name, country, sample-company flag, qbXML version, and a stable 64-character identity hash derived from those supported fields. An administrator should first load the company information and save the returned identity hash in the QuickBooks mapping configuration. Later company requests are rejected as `QUICKBOOKS_COMPANY_MISMATCH` if a configured company name, legal name, country, or identity hash differs. The hash is a company-open-check aid, not a filesystem path or a restorable company-file key.
+
 QuickBooks informational status 1 responses that mean no matching object are treated as an empty catalog or an unavailable home-currency reference, rather than as a failed query. After rebuilding the bridge, stop the old bridge process and run the launcher again.
 
 ## Mapping and safety
@@ -56,3 +58,7 @@ node src\scripts\prepare-quickbooks-sync-index.js --create-index
 ```
 
 The preflight reports counts only and does not print stored keys or ListIDs. No live QuickBooks transaction test is supported by this bridge.
+
+## Backup and recovery
+
+Follow [the independent MongoDB and QuickBooks recovery procedure](../docs/backup-and-recovery.md). MongoDB and QuickBooks backups are independent; restore and reconcile them before resuming synchronization. A timeout or bridge outage must remain unresolved until QuickBooks is queried and the transaction is confirmed.

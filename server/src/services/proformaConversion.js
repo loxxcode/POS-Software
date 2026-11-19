@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import AppSettings from "../models/AppSettings.js";
 import Customer from "../models/Customer.js";
 import Proforma from "../models/Proforma.js";
@@ -213,7 +213,18 @@ export async function convertProformaToSale(id, values, actor) {
       sale.quickBooksRequestId = quickBooksRequestId;
       await sale.save({ session });
       await SyncJob.create(
-        [{ saleId: sale._id, idempotencyKey: quickBooksRequestId, status: "pending" }],
+        [{
+          saleId: sale._id,
+          internalJobId: randomUUID(),
+          operationType: "createSalesReceipt",
+          entityType: "sale",
+          entityId: sale._id,
+          direction: "posToQuickBooks",
+          payloadReference: quickBooksRequestId,
+          requestHash: createHash("sha256").update(quickBooksRequestId).digest("hex"),
+          idempotencyKey: quickBooksRequestId,
+          status: "pending",
+        }],
         { session }
       );
       proforma.status = "converted";

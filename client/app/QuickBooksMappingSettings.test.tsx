@@ -43,6 +43,8 @@ function installFetch(productResponse: unknown, catalogResponse: unknown = null,
       body = matchResponses?.preview;
     } else if (path === "/api/sync/quickbooks/mappings/auto-match/apply") {
       body = matchResponses?.apply;
+    } else if (path === "/api/sync/jobs") {
+      body = { success: true, count: 0, data: [] };
     } else {
       throw new Error(`Unexpected request: ${path}`);
     }
@@ -255,5 +257,55 @@ describe("QuickBooksMappingSettings", () => {
     expect(fetchMock.mock.calls.some(([input]) =>
       new URL(String(input)).pathname === "/api/sync/quickbooks/mappings/auto-match/apply"
     )).toBe(true);
+  });
+
+  it("renders unresolved synchronization jobs and prevents blank TxnID confirmation", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/sync/jobs") {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            count: 1,
+            data: [{
+              _id: "job-1",
+              internalJobId: "job-uuid",
+              operationType: "createSalesReceipt",
+              status: "outcome_unknown",
+              attempts: 1,
+              quickBooksTxnId: null,
+              lastErrorCode: "BRIDGE_TIMEOUT",
+              saleId: { receiptNumber: "LIB-TEST" },
+            }],
+          }),
+        };
+      }
+      if (path === "/api/sync/quickbooks/preferences") {
+        return { ok: true, json: async () => ({ success: true, data: { multiCurrencyEnabled: false, homeCurrencyReferenceAvailable: false, homeCurrencyCode: null, homeCurrencyName: null } }) };
+      }
+      if (path === "/api/sync/quickbooks/mappings/config") {
+        return { ok: true, json: async () => ({ success: true, data: { accountsReceivableAccountListId: null, taxRateMappings: [], paymentMethodMappings: [] } }) };
+      }
+      if (path === "/api/sync/quickbooks/mappings/products") {
+        return { ok: true, json: async () => ({ success: true, data: { count: 0, page: 1, limit: 25, data: [] } }) };
+      }
+      if (path === "/api/sync/quickbooks/mappings/customers") {
+        return { ok: true, json: async () => ({ success: true, data: { count: 0, page: 1, limit: 25, data: [] } }) };
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<QuickBooksMappingSettings />);
+
+    expect(await screen.findByText("Synchronization reconciliation")).toBeTruthy();
+    expect(await screen.findByText("outcome_unknown")).toBeTruthy();
+    const confirm = screen.getByRole("button", { name: "CONFIRM" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByRole("textbox", { name: "QuickBooks transaction ID for job-uuid" }), {
+      target: { value: "txn-confirmed" },
+    });
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
   });
 });
