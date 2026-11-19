@@ -14,6 +14,7 @@ const productSchema = new mongoose.Schema(
     barcode: { type: String, trim: true, default: "" },
     unit: { type: String, trim: true, default: "unit", maxlength: 30 },
     taxRate: { type: Number, default: null, min: 0, max: 100 },
+    quickBooksItemListId: { type: String, trim: true, default: null, maxlength: 100 },
     itemType: {
       type: String,
       enum: ["book", "stationery", "other"],
@@ -38,5 +39,13 @@ const productSchema = new mongoose.Schema(
 );
 
 productSchema.index({ name: "text", sku: "text", isbn: "text" });
+productSchema.index(
+  { quickBooksItemListId: 1 },
+  {
+    name: "quickbooks_product_listid_unique",
+    unique: true,
+    partialFilterExpression: { quickBooksItemListId: { $type: "string" } },
+  }
+);
 
 export default mongoose.model("Product", productSchema);

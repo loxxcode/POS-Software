@@ -1,14 +1,512 @@
 
 import { Router } from "express";
 import mongoose from "mongoose";
+import Customer from "../models/Customer.js";
+import Product from "../models/Product.js";
+import QuickBooksSyncSettings from "../models/QuickBooksSyncSettings.js";
+import requireRole from "../middleware/requireRole.js";
 import SyncJob from "../models/SyncJob.js";
+import {
+  getQuickBooksBridgeCapabilities,
+  getQuickBooksBridgeHealth,
+  getQuickBooksCompany,
+  getQuickBooksPreferences,
+  getQuickBooksCatalogs,
+  QuickBooksBridgeError,
+  updateQuickBooksCustomer,
+  updateQuickBooksItem,
+} from "../services/quickBooksBridge.js";
+import { buildQuickBooksAutoMatchPlan } from "../services/quickBooksAutoMatch.js";
 
 const router = Router();
+const paymentMethods = ["cash", "card", "mobile_money", "other"];
+
+function bridgeRoute(operation) {
+  return async (_request, response, next) => {
+    try {
+      const data = await operation();
+      return response.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof QuickBooksBridgeError) {
+        return response.status(error.statusCode).json({
+          success: false,
+          code: error.code,
+          message: error.message,
+        });
+      }
+      return next(error);
+    }
+  };
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isValidListId(value, nullable = false) {
+  if (nullable && value === null) return true;
+  return typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.trim().length <= 100 &&
+    !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function pagination(query) {
+  const page = query.page === undefined ? 1 : Number(query.page);
+  const limit = query.limit === undefined ? 50 : Number(query.limit);
+  if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    return null;
+  }
+  return { page, limit };
+}
+
+async function getOrCreateQuickBooksSettings() {
+  return QuickBooksSyncSettings.findOneAndUpdate(
+    { _id: "default" },
+    { $setOnInsert: {} },
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+  ).lean();
+}
+
+async function loadQuickBooksAutoMatchPlan() {
+  const catalogs = await getQuickBooksCatalogs();
+  const [products, customers] = await Promise.all([
+    Product.find()
+      .select("_id active sku name sellingPrice quickBooksItemListId")
+      .lean(),
+    Customer.find()
+      .select("_id name email phone address quickBooksListId")
+      .lean(),
+  ]);
+  return {
+    products,
+    customers,
+    plan: buildQuickBooksAutoMatchPlan({ products, customers, catalogs }),
+  };
+}
+
+function publicMatch(match) {
+  return {
+    kind: match.kind,
+    posId: match.posId,
+    posName: match.posName,
+    ...(match.kind === "product" ? { posSku: match.posSku, posPrice: match.posPrice } : {}),
+    quickBooksListId: match.quickBooksListId,
+    quickBooksName: match.quickBooksName,
+    matchBy: match.matchBy,
+    alreadyLinked: match.alreadyLinked,
+  };
+}
+
+function matchesSnapshot(record, match) {
+  if (!record) return false;
+  const currentListId = match.kind === "product"
+    ? record.quickBooksItemListId || null
+    : record.quickBooksListId || null;
+  if (
+    record.name !== match.posName ||
+    currentListId !== match.previousListId
+  ) return false;
+  return match.kind === "product"
+    ? record.sku === match.posSku && record.sellingPrice === match.posPrice
+    : (record.email || "") === match.posEmail &&
+      (record.phone || "") === match.posPhone &&
+      (record.address || "") === match.posAddress;
+}
+
+function matchFieldLimits(match) {
+  if (match.kind === "product") {
+    return match.posName.length <= 31 &&
+      Number.isFinite(match.posPrice) &&
+      match.posPrice >= 0 &&
+      match.posPrice <= 1000000000
+      ? null
+      : "POS product name or price exceeds QuickBooks supported limits.";
+  }
+  return match.posName.length <= 41 &&
+    match.posEmail.length <= 254 &&
+    match.posPhone.length <= 30 &&
+    match.posAddress.length <= 205
+    ? null
+    : "POS customer fields exceed QuickBooks supported limits.";
+}
+
+router.get("/quickbooks/health", requireRole("administration"), bridgeRoute(getQuickBooksBridgeHealth));
+router.get("/quickbooks/capabilities", requireRole("administration"), bridgeRoute(getQuickBooksBridgeCapabilities));
+router.get("/quickbooks/company", requireRole("administration"), bridgeRoute(getQuickBooksCompany));
+router.get("/quickbooks/preferences", requireRole("administration"), bridgeRoute(getQuickBooksPreferences));
+router.get("/quickbooks/catalogs", requireRole("administration"), bridgeRoute(getQuickBooksCatalogs));
+
+router.post("/quickbooks/mappings/auto-match/preview", requireRole("administration"), async (_request, response, next) => {
+  try {
+    const { plan } = await loadQuickBooksAutoMatchPlan();
+    return response.json({
+      success: true,
+      data: {
+        token: plan.token,
+        products: plan.products,
+        customers: plan.customers,
+        truncated: plan.truncated,
+        matches: plan.matches.map(publicMatch),
+      },
+    });
+  } catch (error) {
+    if (error instanceof QuickBooksBridgeError) {
+      return response.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
+    return next(error);
+  }
+});
+
+router.post("/quickbooks/mappings/auto-match/apply", requireRole("administration"), async (request, response, next) => {
+  const { token } = request.body || {};
+  if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token)) {
+    return response.status(400).json({ success: false, message: "Create a fresh exact-match preview before applying changes." });
+  }
+
+  try {
+    const { plan } = await loadQuickBooksAutoMatchPlan();
+    if (token !== plan.token) {
+      return response.status(409).json({
+        success: false,
+        code: "MATCH_PREVIEW_STALE",
+        message: "POS or QuickBooks data changed after the preview. Create a new preview before applying changes.",
+      });
+    }
+
+    const failures = [];
+    let syncedProducts = 0;
+    let syncedCustomers = 0;
+    for (const match of plan.matches) {
+      const fieldLimitError = matchFieldLimits(match);
+      if (fieldLimitError) {
+        failures.push({ kind: match.kind, posName: match.posName, message: fieldLimitError });
+        continue;
+      }
+
+      try {
+        if (match.kind === "product") {
+          const current = await Product.findOne({ _id: match.posId, active: true })
+            .select("_id active sku name sellingPrice quickBooksItemListId")
+            .lean();
+          if (!matchesSnapshot(current, match)) {
+            failures.push({ kind: match.kind, posName: match.posName, message: "POS product changed after the preview; it was not synchronized." });
+            continue;
+          }
+          if (!match.alreadyLinked) {
+            const linked = await Product.updateOne(
+              { _id: match.posId, active: true, quickBooksItemListId: match.previousListId },
+              { $set: { quickBooksItemListId: match.quickBooksListId } }
+            );
+            if (linked.modifiedCount !== 1) {
+              failures.push({ kind: match.kind, posName: match.posName, message: "POS product mapping changed before it could be linked." });
+              continue;
+            }
+          }
+          await updateQuickBooksItem(match.quickBooksListId, {
+            name: match.posName,
+            salesPrice: match.posPrice,
+          });
+          syncedProducts++;
+        } else {
+          const current = await Customer.findById(match.posId)
+            .select("_id name email phone address quickBooksListId")
+            .lean();
+          if (!matchesSnapshot(current, match)) {
+            failures.push({ kind: match.kind, posName: match.posName, message: "POS customer changed after the preview; it was not synchronized." });
+            continue;
+          }
+          if (!match.alreadyLinked) {
+            const linked = await Customer.updateOne(
+              { _id: match.posId, quickBooksListId: match.previousListId },
+              { $set: { quickBooksListId: match.quickBooksListId } }
+            );
+            if (linked.modifiedCount !== 1) {
+              failures.push({ kind: match.kind, posName: match.posName, message: "POS customer mapping changed before it could be linked." });
+              continue;
+            }
+          }
+          await updateQuickBooksCustomer(match.quickBooksListId, {
+            name: match.posName,
+            email: match.posEmail,
+            phone: match.posPhone,
+            address: match.posAddress,
+          });
+          syncedCustomers++;
+        }
+      } catch (error) {
+        if (error instanceof QuickBooksBridgeError) {
+          failures.push({
+            kind: match.kind,
+            posName: match.posName,
+            message: error.message,
+            mappingSaved: !match.alreadyLinked,
+          });
+          continue;
+        }
+        if (error.code === 11000) {
+          failures.push({ kind: match.kind, posName: match.posName, message: "This QuickBooks record is already linked to another POS record." });
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    return response.json({
+      success: true,
+      data: {
+        syncedProducts,
+        syncedCustomers,
+        failed: failures.length,
+        failures,
+      },
+    });
+  } catch (error) {
+    if (error instanceof QuickBooksBridgeError) {
+      return response.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
+    return next(error);
+  }
+});
+
+router.get("/quickbooks/mappings/products", requireRole("administration"), async (request, response, next) => {
+  const pageOptions = pagination(request.query);
+  if (!pageOptions) {
+    return response.status(400).json({ success: false, message: "Page must be positive and limit must be from 1 through 100." });
+  }
+  const search = typeof request.query.search === "string" ? request.query.search.trim().slice(0, 100) : "";
+  const filter = { active: true };
+  if (search) {
+    const expression = new RegExp(escapeRegex(search), "i");
+    filter.$or = [{ name: expression }, { sku: expression }, { quickBooksItemListId: expression }];
+  }
+  try {
+    const [count, data] = await Promise.all([
+      Product.countDocuments(filter),
+      Product.find(filter)
+        .select("sku name quickBooksItemListId")
+        .sort({ name: 1, _id: 1 })
+        .skip((pageOptions.page - 1) * pageOptions.limit)
+        .limit(pageOptions.limit)
+        .lean(),
+    ]);
+    return response.json({
+      success: true,
+      data: { count, page: pageOptions.page, limit: pageOptions.limit, data },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/quickbooks/mappings/customers", requireRole("administration"), async (request, response, next) => {
+  const pageOptions = pagination(request.query);
+  if (!pageOptions) {
+    return response.status(400).json({ success: false, message: "Page must be positive and limit must be from 1 through 100." });
+  }
+  const search = typeof request.query.search === "string" ? request.query.search.trim().slice(0, 100) : "";
+  const filter = {};
+  if (search) {
+    const expression = new RegExp(escapeRegex(search), "i");
+    filter.$or = [{ name: expression }, { quickBooksListId: expression }];
+  }
+  try {
+    const [count, data] = await Promise.all([
+      Customer.countDocuments(filter),
+      Customer.find(filter)
+        .select("name quickBooksListId")
+        .sort({ name: 1, _id: 1 })
+        .skip((pageOptions.page - 1) * pageOptions.limit)
+        .limit(pageOptions.limit)
+        .lean(),
+    ]);
+    return response.json({
+      success: true,
+      data: { count, page: pageOptions.page, limit: pageOptions.limit, data },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.patch("/quickbooks/mappings/products/:id", requireRole("administration"), async (request, response, next) => {
+  const { listId } = request.body || {};
+  if (!mongoose.isValidObjectId(request.params.id) || !isValidListId(listId, true)) {
+    return response.status(400).json({ success: false, message: "Enter a valid product ID and QuickBooks ListID, or null to clear the mapping." });
+  }
+
+  const normalizedListId = typeof listId === "string" ? listId.trim() : null;
+  try {
+    const product = await Product.findById(request.params.id).select("_id sku name active quickBooksItemListId");
+    if (!product || !product.active) {
+      return response.status(404).json({ success: false, message: "Active product not found." });
+    }
+    if (normalizedListId) {
+      const duplicate = await Product.exists({
+        _id: { $ne: product._id },
+        quickBooksItemListId: normalizedListId,
+      });
+      if (duplicate) {
+        return response.status(409).json({ success: false, message: "That QuickBooks item is already mapped to another POS product." });
+      }
+    }
+    product.quickBooksItemListId = normalizedListId;
+    await product.save();
+    return response.json({
+      success: true,
+      data: { _id: product._id, sku: product.sku, name: product.name, quickBooksItemListId: product.quickBooksItemListId },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return response.status(409).json({ success: false, message: "That QuickBooks item is already mapped to another POS product." });
+    }
+    return next(error);
+  }
+});
+
+router.patch("/quickbooks/mappings/customers/:id", requireRole("administration"), async (request, response, next) => {
+  const { listId } = request.body || {};
+  if (!mongoose.isValidObjectId(request.params.id) || !isValidListId(listId, true)) {
+    return response.status(400).json({ success: false, message: "Enter a valid customer ID and QuickBooks ListID, or null to clear the mapping." });
+  }
+
+  const normalizedListId = typeof listId === "string" ? listId.trim() : null;
+  try {
+    const customer = await Customer.findById(request.params.id);
+    if (!customer) {
+      return response.status(404).json({ success: false, message: "Customer not found." });
+    }
+    if (normalizedListId) {
+      const duplicate = await Customer.exists({
+        _id: { $ne: customer._id },
+        quickBooksListId: normalizedListId,
+      });
+      if (duplicate) {
+        return response.status(409).json({ success: false, message: "That QuickBooks customer is already mapped to another POS customer." });
+      }
+    }
+    customer.quickBooksListId = normalizedListId;
+    await customer.save();
+    return response.json({
+      success: true,
+      data: { _id: customer._id, name: customer.name, quickBooksListId: customer.quickBooksListId },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return response.status(409).json({ success: false, message: "That QuickBooks customer is already mapped to another POS customer." });
+    }
+    return next(error);
+  }
+});
+
+router.get("/quickbooks/mappings/config", requireRole("administration"), async (_request, response, next) => {
+  try {
+    const data = await getOrCreateQuickBooksSettings();
+    return response.json({ success: true, data });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.patch("/quickbooks/mappings/config", requireRole("administration"), async (request, response, next) => {
+  const {
+    accountsReceivableAccountListId,
+    taxRateMappings,
+    paymentMethodMappings,
+  } = request.body || {};
+  if (
+    !isValidListId(accountsReceivableAccountListId, true) ||
+    !Array.isArray(taxRateMappings) ||
+    taxRateMappings.length > 100 ||
+    !Array.isArray(paymentMethodMappings) ||
+    paymentMethodMappings.length > paymentMethods.length
+  ) {
+    return response.status(400).json({ success: false, message: "Enter valid receivables, tax-rate, and payment-method mappings." });
+  }
+
+  const normalizedTaxMappings = [];
+  const mappedRates = new Set();
+  for (const mapping of taxRateMappings) {
+    if (
+      !mapping ||
+      !Number.isFinite(mapping.posTaxRate) ||
+      mapping.posTaxRate < 0 ||
+      mapping.posTaxRate > 100 ||
+      Math.abs(mapping.posTaxRate * 100 - Math.round(mapping.posTaxRate * 100)) > 1e-8 ||
+      !isValidListId(mapping.quickBooksSalesTaxCodeListId) ||
+      !isValidListId(mapping.quickBooksSalesTaxItemListId, true)
+    ) {
+      return response.status(400).json({ success: false, message: "Each tax mapping needs a valid POS rate, QuickBooks tax code, and optional sales-tax item." });
+    }
+    const rateKey = Math.round(mapping.posTaxRate * 100);
+    if (mappedRates.has(rateKey)) {
+      return response.status(400).json({ success: false, message: "Each POS tax rate can be mapped only once." });
+    }
+    mappedRates.add(rateKey);
+    normalizedTaxMappings.push({
+      posTaxRate: mapping.posTaxRate,
+      quickBooksSalesTaxCodeListId: mapping.quickBooksSalesTaxCodeListId.trim(),
+      quickBooksSalesTaxItemListId: mapping.quickBooksSalesTaxItemListId
+        ? mapping.quickBooksSalesTaxItemListId.trim()
+        : null,
+    });
+  }
+
+  const normalizedPaymentMappings = [];
+  const mappedMethods = new Set();
+  for (const mapping of paymentMethodMappings) {
+    if (
+      !mapping ||
+      !paymentMethods.includes(mapping.posPaymentMethod) ||
+      !isValidListId(mapping.quickBooksPaymentMethodListId) ||
+      !isValidListId(mapping.quickBooksDepositAccountListId)
+    ) {
+      return response.status(400).json({ success: false, message: "Each payment mapping needs a valid POS method, QuickBooks payment method, and deposit account." });
+    }
+    if (mappedMethods.has(mapping.posPaymentMethod)) {
+      return response.status(400).json({ success: false, message: "Each POS payment method can be mapped only once." });
+    }
+    mappedMethods.add(mapping.posPaymentMethod);
+    normalizedPaymentMappings.push({
+      posPaymentMethod: mapping.posPaymentMethod,
+      quickBooksPaymentMethodListId: mapping.quickBooksPaymentMethodListId.trim(),
+      quickBooksDepositAccountListId: mapping.quickBooksDepositAccountListId.trim(),
+    });
+  }
+
+  try {
+    const data = await QuickBooksSyncSettings.findOneAndUpdate(
+      { _id: "default" },
+      {
+        $set: {
+          accountsReceivableAccountListId: accountsReceivableAccountListId
+            ? accountsReceivableAccountListId.trim()
+            : null,
+          taxRateMappings: normalizedTaxMappings,
+          paymentMethodMappings: normalizedPaymentMappings,
+          updatedBy: request.user.email,
+        },
+      },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    ).lean();
+    return response.json({ success: true, data });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 // GET /api/sync/jobs?status=pending
 router.get("/jobs", async (req, res, next) => {
   try {
-    const allowed = ["pending", "processing", "synced", "failed"];
+    const allowed = ["pending", "processing", "synced", "failed", "needs_review"];
     const filter = {};
 
     if (req.query.status) {
@@ -22,6 +520,7 @@ router.get("/jobs", async (req, res, next) => {
     }
 
     const data = await SyncJob.find(filter)
+      .select("-qbxmlRequest -qbxmlResponse")
       .populate("saleId", "receiptNumber total currency createdAt")
       .sort({ createdAt: 1 })
       .limit(100)
@@ -44,6 +543,7 @@ router.get("/jobs/:id", async (req, res, next) => {
     }
 
     const data = await SyncJob.findById(req.params.id)
+      .select("-qbxmlRequest -qbxmlResponse")
       .populate("saleId", "receiptNumber total currency")
       .lean();
 

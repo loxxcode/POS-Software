@@ -3,6 +3,10 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import InventoryLog from "../models/InventoryLog.js";
 import Product from "../models/Product.js";
+import {
+  QuickBooksBridgeError,
+  updateQuickBooksItem,
+} from "../services/quickBooksBridge.js";
 
 const router = Router();
 
@@ -181,11 +185,35 @@ router.patch("/:id", async (req, res, next) => {
   }
 
   try {
+    const existing = await Product.findOne({
+      _id: req.params.id,
+      active: true,
+    }).select("quickBooksItemListId").lean();
+    if (!existing) {
+      return res.status(404).json({ success: false, message: "Product not found." });
+    }
+
+    const normalizedSku = sku.trim().toUpperCase();
+    const skuConflict = await Product.exists({
+      sku: normalizedSku,
+      _id: { $ne: req.params.id },
+    });
+    if (skuConflict) {
+      return res.status(409).json({ success: false, message: "A product with this code already exists." });
+    }
+
+    if (existing.quickBooksItemListId) {
+      await updateQuickBooksItem(existing.quickBooksItemListId, {
+        name: name.trim(),
+        salesPrice: sellingPrice,
+      });
+    }
+
     const data = await Product.findOneAndUpdate(
       { _id: req.params.id, active: true },
       {
         $set: {
-          sku: sku.trim(),
+          sku: normalizedSku,
           name: name.trim(),
           barcode: barcode.trim(),
           unit: unit.trim(),
@@ -205,6 +233,13 @@ router.patch("/:id", async (req, res, next) => {
 
     return res.json({ success: true, data });
   } catch (error) {
+    if (error instanceof QuickBooksBridgeError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
     if (error.code === 11000) {
       return res.status(409).json({ success: false, message: "A product with this code already exists." });
     }

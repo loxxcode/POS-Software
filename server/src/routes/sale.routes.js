@@ -194,8 +194,11 @@ router.post("/", async (req, res, next) => {
         { session }
       );
 
+      const quickBooksRequestId = `pos-sale:${sale._id}`;
+      sale.quickBooksRequestId = quickBooksRequestId;
+      await sale.save({ session });
       await SyncJob.create(
-        [{ saleId: sale._id, status: "pending" }],
+        [{ saleId: sale._id, idempotencyKey: quickBooksRequestId, status: "pending" }],
         { session }
       );
 

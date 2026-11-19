@@ -68,6 +68,9 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .inventory-toolbar .search-box { flex: 1; min-width: 90px; }
 .inventory-toolbar .button { white-space: nowrap; }
 .inventory-toolbar .button:disabled { opacity: .48; }
+.quickbooks-inventory-catalog { display: grid; gap: 8px; margin-top: 22px; }
+.quickbooks-inventory-catalog h3 { margin: 0; color: #293349; font-size: 13px; }
+.quickbooks-inventory-catalog .hint { margin: 0; }
 select, input { min-width: 0; height: 31px; padding: 4px 8px; border: 1px solid #cbd1dd; border-radius: 3px; outline: 0; color: #333844; background: #fff; font-size: 11px; }
 select:focus, input:focus { border-color: #7d98e5; box-shadow: 0 0 0 2px #e6ecff; }
 .search-box, .customer-search { height: 31px; display: flex; align-items: center; border: 1px solid #cbd1dd; border-radius: 3px; background: white; }
@@ -555,6 +558,75 @@ select:focus, input:focus { border-color: #7d98e5; box-shadow: 0 0 0 2px #e6ecff
 .admin-settings-form > .button { justify-self: start; }
 .settings-summary .admin-health-row { gap: 16px; }
 .settings-summary .admin-health-row strong { text-align: right; overflow-wrap: anywhere; }
+.button-outline { border: 1px solid #d5dbea; color: #334364; background: #f8faff; }
+.button-outline:hover:not(:disabled) { border-color: #9eb1e8; color: #234cae; background: #eef3ff; }
+.button-outline:disabled { opacity: .5; }
+.qb-mapping-panel { display: grid; gap: 14px; }
+.qb-mapping-heading { align-items: center; }
+.qb-mapping-heading .button { flex: 0 0 auto; }
+.qb-mapping-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.qb-mapping-section { min-width: 0; display: grid; align-content: start; gap: 10px; padding: 13px; border: 1px solid #e6eaf2; border-radius: 6px; background: #fbfcff; }
+.qb-mapping-section .admin-panel-heading { margin: 0; }
+.qb-mapping-section .admin-panel-heading h4, .qb-mapping-subheading strong { margin: 0; color: #252b3c; font-size: 11px; }
+.qb-mapping-section .admin-panel-heading p, .qb-mapping-subheading small { display: block; margin: 3px 0 0; color: #848b99; font-size: 9px; line-height: 1.45; }
+.qb-mapping-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.qb-mapping-search input { width: 100%; }
+.qb-mapping-rows { display: grid; gap: 7px; max-height: 330px; overflow: auto; }
+.qb-mapping-row { display: grid; grid-template-columns: minmax(90px, .75fr) minmax(130px, 1.5fr) auto; align-items: center; gap: 7px; padding: 7px; border: 1px solid #edf0f5; border-radius: 5px; background: #fff; }
+.qb-mapping-row > div { min-width: 0; display: grid; gap: 3px; }
+.qb-mapping-row strong { overflow: hidden; color: #30384a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.qb-mapping-row small { overflow: hidden; color: #858c9a; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.qb-mapping-row select, .qb-tax-mapping-row select, .qb-payment-mapping-row select, .qb-ar-mapping select { width: 100%; min-width: 0; font-size: 10px; }
+.qb-mapping-row .button { padding: 0 9px; font-size: 9px; }
+.qb-mapping-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #7d8594; font-size: 9px; }
+.qb-mapping-pagination > div { display: flex; gap: 5px; }
+.qb-mapping-pagination .button { min-height: 26px; padding: 0 8px; font-size: 9px; }
+.qb-mapping-empty { margin: 0; color: #858c9a; font-size: 10px; }
+.qb-mapping-warning { margin: 0; padding: 9px 11px; border: 1px solid #f1d8a8; border-radius: 5px; color: #795019; background: #fff8e9; font-size: 10px; line-height: 1.5; }
+.qb-mapping-status { margin: 0; padding: 8px 10px; border: 1px solid #e4e9f2; border-radius: 5px; color: #586274; background: #f8faff; font-size: 10px; line-height: 1.5; }
+.qb-auto-match { min-width: 0; display: grid; gap: 10px; padding: 13px; border: 1px solid #dfe7f5; border-radius: 7px; background: #f8faff; }
+.qb-auto-match .qb-catalog-heading p { max-width: 1000px; line-height: 1.55; }
+.qb-auto-match-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.qb-auto-match-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 7px; }
+.qb-auto-match-summary > div { display: grid; gap: 5px; min-width: 0; padding: 8px; border: 1px solid #e6eaf2; border-radius: 5px; background: #fff; }
+.qb-auto-match-summary span { color: #7d8594; font-size: 8px; }
+.qb-auto-match-summary strong { color: #334364; font-size: 14px; }
+.qb-auto-match-table-wrap { max-height: 320px; overflow: auto; border: 1px solid #e7ebf2; border-radius: 6px; background: #fff; }
+.qb-auto-match-table-wrap small { display: block; margin-top: 3px; color: #828b9a; font-size: 8px; }
+.qb-catalog-browser { min-width: 0; display: grid; gap: 11px; padding: 14px; border: 1px solid #e3e8f1; border-radius: 8px; background: linear-gradient(180deg, #fbfcff, #fff 140px); }
+.qb-catalog-heading h4 { margin: 0; color: #252b3c; font-size: 12px; }
+.qb-catalog-heading p { margin: 4px 0 0; color: #818999; font-size: 9px; }
+.qb-catalog-tabs { min-width: 0; display: flex; gap: 5px; overflow-x: auto; padding-bottom: 5px; border-bottom: 1px solid #e9edf4; }
+.qb-catalog-tabs button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; min-height: 33px; padding: 0 11px; border: 1px solid transparent; border-radius: 5px; color: #687184; background: transparent; font-size: 9px; font-weight: 600; cursor: pointer; }
+.qb-catalog-tabs button:hover { color: #3158c6; background: #f1f5ff; }
+.qb-catalog-tabs button[aria-selected="true"] { border-color: #dce5fc; color: #264caf; background: #edf2ff; }
+.qb-catalog-tabs button span { min-width: 20px; padding: 2px 5px; border-radius: 10px; color: #687184; background: #e9edf4; text-align: center; font-size: 8px; }
+.qb-catalog-tabs button[aria-selected="true"] span { color: #264caf; background: #dce6ff; }
+.qb-catalog-panel { min-width: 0; display: grid; gap: 9px; }
+.qb-catalog-toolbar { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(120px, 190px) minmax(80px, 100px); align-items: end; gap: 9px; }
+.qb-catalog-toolbar label { min-width: 0; display: grid; gap: 4px; color: #6f788a; font-size: 9px; }
+.qb-catalog-toolbar input, .qb-catalog-toolbar select { width: 100%; height: 34px; border-radius: 5px; font-size: 10px; }
+.qb-catalog-table-wrap { max-height: 430px; overflow: auto; border: 1px solid #e7ebf2; border-radius: 6px; background: #fff; }
+.qb-catalog-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 10px; text-align: left; }
+.qb-catalog-table th { position: sticky; top: 0; z-index: 1; padding: 9px 11px; border-bottom: 1px solid #e7ebf2; color: #687184; background: #f6f8fc; font-size: 8px; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.qb-catalog-table td { max-width: 330px; padding: 9px 11px; border-bottom: 1px solid #f0f2f6; color: #394255; overflow-wrap: anywhere; }
+.qb-catalog-table tbody tr:last-child td { border-bottom: 0; }
+.qb-catalog-table tbody tr:hover td { background: #f8faff; }
+.qb-catalog-table td:first-child { color: #7a8393; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; }
+.qb-catalog-table .qb-catalog-empty { height: 70px; color: #7c8493; text-align: center; }
+.qb-catalog-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #7d8594; font-size: 9px; }
+.qb-catalog-pagination > div { display: flex; align-items: center; gap: 7px; }
+.qb-catalog-pagination .button { min-height: 27px; padding: 0 9px; font-size: 9px; }
+.qb-mapping-success { margin: 0; color: #286d50; font-size: 10px; }
+.qb-mapping-config { display: grid; gap: 14px; padding-top: 13px; border-top: 1px solid #e9edf4; }
+.qb-mapping-config > section { display: grid; gap: 8px; }
+.qb-mapping-subheading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.qb-mapping-subheading .button { min-height: 27px; padding: 0 9px; font-size: 9px; }
+.qb-tax-mapping-row, .qb-payment-mapping-row { display: grid; grid-template-columns: minmax(80px, .55fr) repeat(2, minmax(150px, 1fr)) auto; align-items: end; gap: 8px; padding: 9px; border: 1px solid #edf0f5; border-radius: 5px; background: #fff; }
+.qb-tax-mapping-row label, .qb-payment-mapping-row label, .qb-ar-mapping label { min-width: 0; display: grid; gap: 4px; color: #687184; font-size: 9px; }
+.qb-tax-mapping-row .button, .qb-payment-mapping-row .button { min-height: 29px; padding: 0 8px; font-size: 9px; }
+.qb-ar-mapping label { max-width: 460px; }
+.qb-mapping-config > .button { justify-self: start; }
 .admin-quick-actions-inline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
 .admin-quick-actions-inline button { min-height: 72px; display: grid; align-content: center; gap: 3px; padding: 10px; border: 1px solid #e7eaf1; border-radius: 5px; background: #fbfcfe; text-align: left; }
 .admin-quick-actions-inline button:hover { border-color: #b7c7f2; background: #f5f7ff; }
@@ -703,6 +775,22 @@ select:focus, input:focus { border-color: #7d98e5; box-shadow: 0 0 0 2px #e6ecff
   .admin-section-intro { align-items: flex-start; flex-direction: column; }
   .audit-filters { width: 100%; flex-direction: column; align-items: stretch; }
   .admin-settings-layout { grid-template-columns: 1fr; }
+  .qb-mapping-heading { align-items: flex-start; flex-direction: column; }
+  .qb-mapping-grid { grid-template-columns: 1fr; }
+  .qb-auto-match-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .qb-auto-match-actions .button { flex: 1; }
+  .qb-catalog-browser { padding: 10px; }
+  .qb-catalog-toolbar { grid-template-columns: minmax(0, 1fr) minmax(90px, .55fr); }
+  .qb-catalog-toolbar label:first-child { grid-column: 1 / -1; }
+  .qb-catalog-pagination { align-items: flex-start; flex-direction: column; }
+  .qb-catalog-pagination > div { width: 100%; justify-content: space-between; }
+  .qb-mapping-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .qb-mapping-row > div { grid-column: 1 / -1; }
+  .qb-mapping-row select { grid-column: 1; }
+  .qb-tax-mapping-row, .qb-payment-mapping-row { grid-template-columns: 1fr 1fr; }
+  .qb-tax-mapping-row label, .qb-payment-mapping-row label { grid-column: span 2; }
+  .qb-tax-mapping-row .button, .qb-payment-mapping-row .button { justify-self: start; }
+  .qb-mapping-subheading { align-items: flex-start; flex-direction: column; }
   .admin-quick-actions-inline { grid-template-columns: 1fr; }
   .profile-account-card > .button { width: 100%; }
   .admin-info-page { margin: 18px auto; padding: 26px 18px; }

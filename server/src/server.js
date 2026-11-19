@@ -4,6 +4,8 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import authenticate from "./middleware/authenticate.js";
 import adminRoutes from "./routes/admin.routes.js";
@@ -20,7 +22,16 @@ import proformaRoutes from "./routes/proforma.routes.js";
 import auditActivity from "./middleware/auditActivity.js";
 import { expireDueProformas } from "./services/proformaWorkflow.js";
 
-dotenv.config();
+const localEnvironment = dotenv.config({
+  path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.env"),
+});
+if (process.env.NODE_ENV !== "production" && localEnvironment.parsed) {
+  for (const key of ["QB_BRIDGE_SECRET", "QB_BRIDGE_PORT"]) {
+    if (localEnvironment.parsed[key] !== undefined) {
+      process.env[key] = localEnvironment.parsed[key];
+    }
+  }
+}
 
 const app = express();
 const allowedFrontendOrigins = new Set(

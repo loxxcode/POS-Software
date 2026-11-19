@@ -8,10 +8,19 @@ const customerSchema = new mongoose.Schema(
     tin: { type: String, trim: true, default: "", maxlength: 50 },
     credit: { type: Number, default: 0, min: 0 },
     address: { type: String, trim: true, default: "", maxlength: 300 },
+    quickBooksListId: { type: String, trim: true, default: null, maxlength: 100 },
   },
   { timestamps: true }
 );
 
 customerSchema.index({ name: 1 });
+customerSchema.index(
+  { quickBooksListId: 1 },
+  {
+    name: "quickbooks_customer_listid_unique",
+    unique: true,
+    partialFilterExpression: { quickBooksListId: { $type: "string" } },
+  }
+);
 
 export default mongoose.model("Customer", customerSchema);

@@ -67,6 +67,20 @@ const saleSchema = new mongoose.Schema(
       enum: ["cash", "card", "mobile_money", "other", "credit"],
       required: true,
     },
+    quickBooksStatus: {
+      type: String,
+      enum: ["pending", "processing", "synced", "failed", "needs_review"],
+      default: "pending",
+    },
+    quickBooksTxnId: { type: String, trim: true, default: null, maxlength: 100 },
+    quickBooksTxnType: {
+      type: String,
+      enum: ["SalesReceipt", "Invoice", "ReceivePayment"],
+      default: null,
+    },
+    quickBooksLastError: { type: String, trim: true, default: null, maxlength: 1000 },
+    quickBooksSyncedAt: { type: Date, default: null },
+    quickBooksRequestId: { type: String, trim: true, default: null, maxlength: 120 },
     status: {
       type: String,
       enum: ["completed", "refunded"],

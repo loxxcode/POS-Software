@@ -3,6 +3,10 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import Product from "../models/Product.js";
 import InventoryLog from "../models/InventoryLog.js";
+import {
+  getQuickBooksCatalogs,
+  QuickBooksBridgeError,
+} from "../services/quickBooksBridge.js";
 
 const router = Router();
 
@@ -10,7 +14,7 @@ const router = Router();
 router.get("/", async (req, res, next) => {
   try {
     const data = await Product.find({ active: true })
-      .select("sku name barcode unit taxRate itemType category origin stockQty sellingPrice costPrice")
+      .select("sku name barcode unit taxRate itemType category origin stockQty sellingPrice costPrice quickBooksItemListId")
       .sort({ name: 1 })
       .limit(500)
       .lean();
@@ -18,6 +22,34 @@ router.get("/", async (req, res, next) => {
     res.json({ success: true, count: data.length, data });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get("/quickbooks", async (_req, res, next) => {
+  try {
+    const catalogs = await getQuickBooksCatalogs();
+    return res.json({
+      success: true,
+      data: {
+        items: catalogs.items.map(item => ({
+          listId: item.listId,
+          name: item.fullName || item.name,
+          type: item.type,
+          quantityOnHand: Number.isFinite(item.quantityOnHand) ? item.quantityOnHand : null,
+          salesPrice: Number.isFinite(item.salesPrice) ? item.salesPrice : null,
+        })),
+        truncated: catalogs.truncated.items,
+      },
+    });
+  } catch (error) {
+    if (error instanceof QuickBooksBridgeError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
+    return next(error);
   }
 });
 

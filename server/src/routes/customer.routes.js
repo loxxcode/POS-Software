@@ -1,9 +1,13 @@
 import { Router } from "express";
-import { randomUUID } from "node:crypto";
 import mongoose from "mongoose";
 import Customer from "../models/Customer.js";
 import CustomerPayment from "../models/CustomerPayment.js";
 import Sale from "../models/Sale.js";
+import {
+  createQuickBooksCustomer,
+  QuickBooksBridgeError,
+  updateQuickBooksCustomer,
+} from "../services/quickBooksBridge.js";
 
 const router = Router();
 
@@ -19,21 +23,42 @@ router.get("/", async (req, res, next) => {
 router.post("/", async (req, res, next) => {
   const { name, email = "", phone = "", tin = "", credit = 0, address = "" } = req.body || {};
   if (
-    typeof name !== "string" || !name.trim() || name.trim().length > 120 ||
+    typeof name !== "string" || !name.trim() || name.trim().length > 41 ||
     typeof email !== "string" || email.length > 254 ||
     (email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) ||
     typeof phone !== "string" || phone.length > 30 ||
     typeof tin !== "string" || tin.length > 50 ||
     !Number.isFinite(credit) || credit < 0 ||
-    typeof address !== "string" || address.length > 300
+    typeof address !== "string" || address.length > 205
   ) {
     return res.status(400).json({ success: false, message: "Enter valid customer details." });
   }
 
   try {
-    const data = await Customer.create({ name, email, phone, tin, credit, address });
+    const quickBooksCustomer = await createQuickBooksCustomer({
+      name: name.trim(),
+      email: email.trim(),
+      phone: phone.trim(),
+      address: address.trim(),
+    });
+    const data = await Customer.create({
+      name,
+      email,
+      phone,
+      tin,
+      credit,
+      address,
+      quickBooksListId: quickBooksCustomer.listId,
+    });
     res.status(201).json({ success: true, data });
   } catch (error) {
+    if (error instanceof QuickBooksBridgeError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
     next(error);
   }
 });
@@ -198,6 +223,24 @@ router.patch("/:id", async (req, res, next) => {
   }
 
   try {
+    const existing = await Customer.findById(req.params.id);
+    if (!existing) return res.status(404).json({ success: false, message: "Customer not found." });
+
+    if (existing.quickBooksListId) {
+      if (name.trim().length > 41 || address.length > 205) {
+        return res.status(400).json({
+          success: false,
+          message: "Mapped QuickBooks customers require a name of at most 41 characters and an address of at most 205 characters.",
+        });
+      }
+      await updateQuickBooksCustomer(existing.quickBooksListId, {
+        name: name.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        address: address.trim(),
+      });
+    }
+
     const data = await Customer.findByIdAndUpdate(
       req.params.id,
       { name, email, phone, tin, credit, address },
@@ -206,6 +249,13 @@ router.patch("/:id", async (req, res, next) => {
     if (!data) return res.status(404).json({ success: false, message: "Customer not found." });
     res.json({ success: true, data });
   } catch (error) {
+    if (error instanceof QuickBooksBridgeError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
     next(error);
   }
 });

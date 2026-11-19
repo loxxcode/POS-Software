@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import CameraBarcodeScanner from "./CameraBarcodeScanner";
 import ProformaWorkspace from "./ProformaWorkspace";
+import QuickBooksMappingSettings from "./QuickBooksMappingSettings";
 import { buildMtnMomoPaymentPayload } from "./payment";
 
 type Screen = "Dashboard" | "Inventory" | "Sales" | "Proformas" | "Discount" | "Customer" | "Request" | "Report" | "Users" | "Organizations" | "Transactions" | "Financial Overview" | "Audit Logs" | "Settings" | "Notifications" | "Profile" | "Chart of Accounts" | "Income" | "Expenses" | "Journal Entries" | "Invoices" | "Bank Reconciliation" | "Financial Statements" | "Transaction Review" | "Approvals" | "Budgets" | "Audit & Compliance" | "Cash Flow" | "Activity Logs";
@@ -28,12 +29,14 @@ type AdminSettings = {
   approvalDiscountPercent: number | null;
   updatedAt?: string;
 };
-type Product = { id: string; code: string; name: string; barcode: string; unit: string; purchase: number; margin: number; price: number; vat: number | null; category: string; origin: string; quantity: number };
-type InventoryApiProduct = { _id: string; sku: string; name: string; barcode?: string; unit?: string; taxRate?: number | null; category?: string; origin?: string; stockQty: number; sellingPrice: number; costPrice?: number };
-type Customer = { id: string; name: string; email: string; phone: string; tin: string; credit: number; address: string };
+type Product = { id: string; code: string; name: string; barcode: string; unit: string; purchase: number; margin: number; price: number; vat: number | null; category: string; origin: string; quantity: number; quickBooksItemListId?: string | null };
+type InventoryApiProduct = { _id: string; sku: string; name: string; barcode?: string; unit?: string; taxRate?: number | null; category?: string; origin?: string; stockQty: number; sellingPrice: number; costPrice?: number; quickBooksItemListId?: string | null };
+type QuickBooksInventoryItem = { listId: string; name: string; type: string; quantityOnHand: number | null; salesPrice: number | null };
+type QuickBooksInventoryData = { items: QuickBooksInventoryItem[]; truncated: boolean };
+type Customer = { id: string; name: string; email: string; phone: string; tin: string; credit: number; address: string; quickBooksListId: string | null };
 type Discount = { id: string; customerId: string | null; customer: string; product: string; reason: string; percent: number; start: string; end: string };
 type Request = { id: string; date: string; createdAt: string; status: string; items: string; operator: string };
-type CustomerApiDocument = { _id: string; name: string; email: string; phone: string; tin: string; credit: number; address: string };
+type CustomerApiDocument = { _id: string; name: string; email: string; phone: string; tin: string; credit: number; address: string; quickBooksListId?: string | null };
 type DiscountApiDocument = { _id: string; customerId: string | null; customerName: string; product: string; reason?: string; title?: string; percent?: number; start: string; end: string };
 type RequestApiDocument = { _id: string; createdAt: string; status: string; items: string; operator: string };
 type CustomerPayment = { id: string; createdAt: string; amount: number; paymentMethod: string; balanceBefore: number; balanceAfter: number; receivedBy: string };
@@ -191,7 +194,24 @@ function toInventoryProduct(product: InventoryApiProduct): Product {
     category: product.category || "General",
     origin: product.origin || "Local",
     quantity: product.stockQty,
+    quickBooksItemListId: product.quickBooksItemListId || null,
   };
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+function isQuickBooksInventoryData(value: unknown): value is QuickBooksInventoryData {
+  return isRecord(value) &&
+    typeof value.truncated === "boolean" &&
+    Array.isArray(value.items) &&
+    value.items.every(item =>
+      isRecord(item) &&
+      typeof item.listId === "string" &&
+      typeof item.name === "string" &&
+      typeof item.type === "string" &&
+      (item.quantityOnHand === null || typeof item.quantityOnHand === "number") &&
+      (item.salesPrice === null || typeof item.salesPrice === "number")
+    );
 }
 async function fetchInventoryProducts(): Promise<Product[]> {
   const response = await fetch(`${apiBaseUrl}/api/inventory`, { credentials: "include" });
@@ -199,6 +219,20 @@ async function fetchInventoryProducts(): Promise<Product[]> {
   if (!response.ok) throw new Error(result.message || "Unable to load inventory.");
   if (!Array.isArray(result.data)) throw new Error("The inventory response was invalid.");
   return result.data.map(toInventoryProduct);
+}
+async function fetchQuickBooksInventory(): Promise<QuickBooksInventoryData> {
+  const response = await fetch(`${apiBaseUrl}/api/inventory/quickbooks`, { credentials: "include" });
+  const result: unknown = await response.json();
+  if (!response.ok) {
+    const message = isRecord(result) && typeof result.message === "string"
+      ? result.message
+      : "Unable to load QuickBooks inventory.";
+    throw new Error(message);
+  }
+  if (!isRecord(result) || !isQuickBooksInventoryData(result.data)) {
+    throw new Error("The QuickBooks inventory response was invalid.");
+  }
+  return result.data;
 }
 async function fetchBusinessData<T>(resource: string): Promise<T[]> {
   const response = await fetch(`${apiBaseUrl}/api/${resource}`, { credentials: "include" });
@@ -216,6 +250,7 @@ function toCustomer(document: CustomerApiDocument): Customer {
     tin: document.tin || "",
     credit: document.credit || 0,
     address: document.address || "",
+    quickBooksListId: document.quickBooksListId || null,
   };
 }
 function toDiscount(document: DiscountApiDocument): Discount {
@@ -300,6 +335,9 @@ export default function Home() {
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventorySaving, setInventorySaving] = useState(false);
   const [inventoryError, setInventoryError] = useState("");
+  const [quickBooksInventory, setQuickBooksInventory] = useState<QuickBooksInventoryData | null>(null);
+  const [quickBooksInventoryLoading, setQuickBooksInventoryLoading] = useState(false);
+  const [quickBooksInventoryError, setQuickBooksInventoryError] = useState("");
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [discounts, setDiscounts] = useState<Discount[]>([]);
   const [editingDiscountId, setEditingDiscountId] = useState<string | null>(null);
@@ -350,6 +388,19 @@ export default function Home() {
   const [editingCustomer, setEditingCustomer] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<string | null>(null);
+  const refreshQuickBooksInventory = useCallback(async () => {
+    setQuickBooksInventoryLoading(true);
+    setQuickBooksInventoryError("");
+    try {
+      setQuickBooksInventory(await fetchQuickBooksInventory());
+    } catch (error) {
+      setQuickBooksInventoryError(
+        error instanceof Error ? error.message : "Unable to load QuickBooks inventory."
+      );
+    } finally {
+      setQuickBooksInventoryLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -467,6 +518,11 @@ export default function Home() {
       });
     return () => { active = false; };
   }, [session?.email]);
+
+  useEffect(() => {
+    if (!session || screen !== "Inventory") return;
+    void refreshQuickBooksInventory();
+  }, [session?.email, screen, refreshQuickBooksInventory]);
 
   useEffect(() => {
     if (!session) {
@@ -777,6 +833,19 @@ export default function Home() {
     (inventoryCategory === "Stock family" || product.category === inventoryCategory) &&
     `${product.code} ${product.name} ${product.barcode}`.toLowerCase().includes(productQuery.toLowerCase())
   ), [inventoryCategory, products, productQuery]);
+  const quickBooksItemsByListId = useMemo(
+    () => new Map((quickBooksInventory?.items || []).map(item => [item.listId, item])),
+    [quickBooksInventory]
+  );
+  const productsByQuickBooksListId = useMemo(() => {
+    const mappedProducts = new Map<string, Product>();
+    for (const product of products) {
+      if (product.quickBooksItemListId) {
+        mappedProducts.set(product.quickBooksItemListId, product);
+      }
+    }
+    return mappedProducts;
+  }, [products]);
   const selectedInventoryProduct = filteredProducts.find(product => product.id === selectedProductId) || null;
   const adjustmentProduct = products.find(product => product.id === editingProduct) || null;
   const adjustmentReason = form.adjustmentReason || "correction";
@@ -1197,6 +1266,9 @@ export default function Home() {
           ? current.map(item => item.id === savedProduct.id ? savedProduct : item)
           : [...current, savedProduct]).sort((a, b) => a.name.localeCompare(b.name)));
         setSelectedProductId(savedProduct.id);
+        if (isEditing && savedProduct.quickBooksItemListId) {
+          await refreshQuickBooksInventory();
+        }
         setMessage(isEditing ? `${savedProduct.name} updated.` : "Product added.");
       }
       setModal(null);
@@ -1816,31 +1888,65 @@ export default function Home() {
               <button className="button button-teal" disabled={!selectedInventoryProduct} onClick={() => {
                 if (selectedInventoryProduct) openProductEditor(selectedInventoryProduct);
               }}>Edit selected</button>
+              <button className="button button-outline" disabled={quickBooksInventoryLoading} onClick={() => void refreshQuickBooksInventory()}>
+                {quickBooksInventoryLoading ? "LOADING QUICKBOOKS…" : "REFRESH QUICKBOOKS STOCK"}
+              </button>
               <button className="button button-blue" onClick={() => openModal("product")}>＋ ADD</button>
             </div>
             {inventoryError && <p className="inventory-error" role="alert">{inventoryError}</p>}
+            {quickBooksInventoryError && <p className="inventory-error" role="alert">{quickBooksInventoryError}</p>}
+            <p className="hint">
+              QuickBooks on-hand values are read-only here. POS sales and stock adjustments continue to use the POS quantity.
+              {quickBooksInventory?.truncated ? " The QuickBooks item list is truncated at 1,000 items." : ""}
+            </p>
             <p className="hint">Select a row to edit product details or adjust its stock.</p>
-            <Table headers={["CODE", "NAME", "PURCHASE C...", "MARGIN %", "SALE PRICE", "VAT", "CATEGORY", "ORIGIN", "QUANTITY"]}>
-              {inventoryLoading && <tr><td colSpan={9}>Loading inventory…</td></tr>}
-              {!inventoryLoading && !inventoryError && filteredProducts.length === 0 && <tr><td colSpan={9}>{products.length ? "No products match your search." : "No products in inventory yet."}</td></tr>}
-              {filteredProducts.map(product => <tr
-                key={product.id}
-                className={`${selectedProductId === product.id ? "row-selected " : ""}inventory-row-selectable`}
-                aria-selected={selectedProductId === product.id}
-                tabIndex={0}
-                onClick={() => setSelectedProductId(product.id)}
-                onKeyDown={event => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setSelectedProductId(product.id);
-                  }
-                }}
-              >
-                <td>{product.code}</td><td>{product.name}</td><td>{money(product.purchase)}</td>
-                <td>{product.margin}%</td><td>{money(product.price)}</td><td>{product.vat === null ? "Not configured" : `${product.vat}%`}</td><td>{product.category}</td><td>{product.origin}</td><td>{product.quantity}</td>
-              </tr>)}
+            <Table headers={["CODE", "NAME", "PURCHASE C...", "MARGIN %", "SALE PRICE", "VAT", "CATEGORY", "ORIGIN", "POS QTY", "QB ITEM", "QB PRICE", "QB ON HAND"]}>
+              {inventoryLoading && <tr><td colSpan={12}>Loading inventory…</td></tr>}
+              {!inventoryLoading && !inventoryError && filteredProducts.length === 0 && <tr><td colSpan={12}>{products.length ? "No products match your search." : "No products in inventory yet."}</td></tr>}
+              {filteredProducts.map(product => {
+                const quickBooksItem = product.quickBooksItemListId
+                  ? quickBooksItemsByListId.get(product.quickBooksItemListId)
+                  : undefined;
+                return <tr
+                  key={product.id}
+                  className={`${selectedProductId === product.id ? "row-selected " : ""}inventory-row-selectable`}
+                  aria-selected={selectedProductId === product.id}
+                  tabIndex={0}
+                  onClick={() => setSelectedProductId(product.id)}
+                  onKeyDown={event => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedProductId(product.id);
+                    }
+                  }}
+                >
+                  <td>{product.code}</td><td>{product.name}</td><td>{money(product.purchase)}</td>
+                  <td>{product.margin}%</td><td>{money(product.price)}</td><td>{product.vat === null ? "Not configured" : `${product.vat}%`}</td><td>{product.category}</td><td>{product.origin}</td><td>{product.quantity}</td>
+                  <td>{quickBooksItem?.name || (product.quickBooksItemListId ? "Linked item unavailable" : "Not linked")}</td>
+                  <td>{quickBooksItem?.salesPrice === null || quickBooksItem?.salesPrice === undefined ? "—" : money(quickBooksItem.salesPrice)}</td>
+                  <td>{quickBooksItem?.quantityOnHand === null || quickBooksItem?.quantityOnHand === undefined ? "—" : quickBooksItem.quantityOnHand}</td>
+                </tr>;
+              })}
             </Table>
             <div className="table-footer"><span>Page 1 of 1</span><span>Item per page &nbsp; <select aria-label="Items per page"><option>20</option><option>50</option><option>100</option></select></span></div>
+            <section className="quickbooks-inventory-catalog">
+              <h3>QuickBooks Desktop item catalog</h3>
+              <p className="hint">Active QuickBooks items are listed below. Only mapped inventory items are editable from POS; all QuickBooks quantities remain read-only.</p>
+              <Table headers={["QUICKBOOKS ITEM", "TYPE", "QB PRICE", "QB ON HAND", "POS PRODUCT"]}>
+                {quickBooksInventoryLoading && !quickBooksInventory && <tr><td colSpan={5}>Loading QuickBooks items…</td></tr>}
+                {!quickBooksInventoryLoading && quickBooksInventory?.items.length === 0 && <tr><td colSpan={5}>No QuickBooks items were returned.</td></tr>}
+                {quickBooksInventory?.items.map(item => {
+                  const mappedProduct = productsByQuickBooksListId.get(item.listId);
+                  return <tr key={item.listId}>
+                    <td>{item.name}</td>
+                    <td>{item.type.replaceAll("_", " ")}</td>
+                    <td>{item.salesPrice === null ? "—" : money(item.salesPrice)}</td>
+                    <td>{item.quantityOnHand === null ? "—" : item.quantityOnHand.toLocaleString()}</td>
+                    <td>{mappedProduct ? mappedProduct.name : "Not linked"}</td>
+                  </tr>;
+                })}
+              </Table>
+            </section>
           </>}
 
           {(screen === "Sales" || screen === "Transactions") && <>
@@ -1940,8 +2046,8 @@ export default function Home() {
               <button className="button button-rose" disabled={!selectedCustomer || businessSaving} onClick={() => void removeCustomer()}>Remove</button>
               <button className="button button-blue" onClick={() => openModal("customer")}>＋ ADD</button>
             </div>
-            <Table headers={["NAME", "EMAIL", "PHONE", "TIN", "CREDITS RWF", "ADDRESS"]}>
-              {filteredCustomers.map(customer => <tr key={customer.id} className={selectedCustomer === customer.id ? "row-selected" : ""} onClick={() => setSelectedCustomer(customer.id)}><td>{customer.name}</td><td>{customer.email || "—"}</td><td>{customer.phone || "—"}</td><td>{customer.tin || "—"}</td><td>{money(customer.credit)}</td><td>{customer.address || "—"}</td></tr>)}
+            <Table headers={["NAME", "EMAIL", "PHONE", "TIN", "CREDITS RWF", "ADDRESS", "QUICKBOOKS"]}>
+              {filteredCustomers.map(customer => <tr key={customer.id} className={selectedCustomer === customer.id ? "row-selected" : ""} onClick={() => setSelectedCustomer(customer.id)}><td>{customer.name}</td><td>{customer.email || "—"}</td><td>{customer.phone || "—"}</td><td>{customer.tin || "—"}</td><td>{money(customer.credit)}</td><td>{customer.address || "—"}</td><td>{customer.quickBooksListId ? "Linked" : "POS only"}</td></tr>)}
             </Table>
             <div className="table-footer"><span>Page 1 of 1 (total records: {customers.length})</span></div>
           </>}
@@ -2680,6 +2786,7 @@ function AdminSettingsPage({ settings, savedSettings, loading, saving, error, on
         </div>
       </section>
     </div>
+    <QuickBooksMappingSettings />
   </section>;
 }
 

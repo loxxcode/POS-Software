@@ -209,7 +209,13 @@ export async function convertProformaToSale(id, values, actor) {
         }],
         { session }
       );
-      await SyncJob.create([{ saleId: sale._id, status: "pending" }], { session });
+      const quickBooksRequestId = `pos-sale:${sale._id}`;
+      sale.quickBooksRequestId = quickBooksRequestId;
+      await sale.save({ session });
+      await SyncJob.create(
+        [{ saleId: sale._id, idempotencyKey: quickBooksRequestId, status: "pending" }],
+        { session }
+      );
       proforma.status = "converted";
       proforma.convertedSaleId = sale._id;
       await proforma.save({ session });
