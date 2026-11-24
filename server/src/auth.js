@@ -84,7 +84,7 @@ export function getSessionUser(request) {
 export function setSessionCookie(response, user) {
   response.cookie(sessionCookie, createSessionToken(user), {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     secure: process.env.NODE_ENV === "production",
     maxAge: sessionDurationMs,
     path: "/",
@@ -94,7 +94,7 @@ export function setSessionCookie(response, user) {
 export function clearSessionCookie(response) {
   response.clearCookie(sessionCookie, {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
   });

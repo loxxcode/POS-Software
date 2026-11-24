@@ -95,7 +95,7 @@ namespace LibraryPos.QuickBooksBridge
                 if (context.Request.HttpMethod.Equals("POST", StringComparison.OrdinalIgnoreCase) ||
                     context.Request.HttpMethod.Equals("PATCH", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (context.Request.ContentLength64 > 16384)
+                    if (context.Request.ContentLength64 > 65536)
                     {
                         WriteJson(response, 413, Failure("REQUEST_BODY_TOO_LARGE", "The request body exceeds the allowed size."));
                         return;
@@ -136,7 +136,7 @@ namespace LibraryPos.QuickBooksBridge
                 WriteJson(
                     response,
                     200,
-                    "{\"success\":true,\"operations\":[\"companyQuery\",\"preferencesQuery\",\"catalogsQuery\",\"customerAdd\",\"customerMod\",\"inventoryItemMod\"],\"salesReceiptsEnabled\":false,\"transactionWritesEnabled\":false,\"quickBooksDeleteEnabled\":false}"
+                    "{\"success\":true,\"operations\":[\"companyQuery\",\"preferencesQuery\",\"catalogsQuery\",\"customerAdd\",\"customerMod\",\"inventoryItemMod\",\"inventoryAdjustmentAdd\",\"salesReceiptAdd\",\"invoiceAdd\"],\"salesReceiptsEnabled\":true,\"invoicesEnabled\":true,\"transactionWritesEnabled\":true,\"quickBooksDeleteEnabled\":false}"
                 );
                 return;
             }
@@ -253,6 +253,56 @@ namespace LibraryPos.QuickBooksBridge
                 }
                 result = QuickBooksMasterData.UpdateInventoryItem(_sdkCountry, listId, name, salesPrice);
             }
+            else if (method == "POST" && path == "/quickbooks/inventory/adjust")
+            {
+                string accountListId = RequiredString(values, "accountListId", 100);
+                string itemListId = RequiredString(values, "itemListId", 100);
+                double quantityDifference = RequiredNumber(values, "quantityDifference");
+                if (quantityDifference == 0 || Double.IsNaN(quantityDifference) || Double.IsInfinity(quantityDifference))
+                {
+                    WriteJson(response, 400, Failure("INVALID_QUANTITY_DIFFERENCE", "quantityDifference must be a non-zero finite number."));
+                    return;
+                }
+                QuickBooksInventoryAdjustmentResult adjustment = QuickBooksInventoryAdjustment.Execute(
+                    _sdkCountry,
+                    accountListId,
+                    itemListId,
+                    quantityDifference,
+                    OptionalString(values, "refNumber", 11),
+                    OptionalString(values, "memo", 4095)
+                );
+                WriteJson(
+                    response,
+                    200,
+                    "{\"success\":true,\"data\":{\"txnId\":\"" + Program.EscapeJson(adjustment.TxnId) +
+                    "\",\"txnNumber\":" + (adjustment.TxnNumber == null
+                        ? "null"
+                        : "\"" + Program.EscapeJson(adjustment.TxnNumber) + "\"") +
+                    ",\"refNumber\":" + (adjustment.RefNumber == null
+                        ? "null"
+                        : "\"" + Program.EscapeJson(adjustment.RefNumber) + "\"") + "}}"
+                );
+                return;
+            }
+            else if (method == "POST" && path == "/quickbooks/sales")
+            {
+                QuickBooksSalesTransactionRequest sale = QuickBooksSalesTransactionRequest.Parse(values);
+                QuickBooksSalesTransactionResult transaction = QuickBooksSalesTransaction.Execute(_sdkCountry, sale);
+                WriteJson(
+                    response,
+                    200,
+                    "{\"success\":true,\"data\":{\"txnId\":\"" + Program.EscapeJson(transaction.TxnId) +
+                    "\",\"txnNumber\":" + (transaction.TxnNumber == null
+                        ? "null"
+                        : "\"" + Program.EscapeJson(transaction.TxnNumber) + "\"") +
+                    ",\"refNumber\":\"" + Program.EscapeJson(transaction.RefNumber) +
+                    "\",\"totalAmount\":" + transaction.TotalAmount.ToString("R", System.Globalization.CultureInfo.InvariantCulture) +
+                    ",\"customerListId\":\"" + Program.EscapeJson(transaction.CustomerListId) +
+                    "\",\"memo\":\"" + Program.EscapeJson(transaction.Memo) +
+                    "\",\"existing\":" + (transaction.Existing ? "true" : "false") + "}}"
+                );
+                return;
+            }
             else
             {
                 response.Headers["Allow"] = "GET, POST, PATCH";
@@ -336,7 +386,7 @@ namespace LibraryPos.QuickBooksBridge
                 int read;
                 while ((read = request.InputStream.Read(chunk, 0, chunk.Length)) > 0)
                 {
-                    if (buffer.Length + read > 16384)
+                    if (buffer.Length + read > 65536)
                     {
                         statusCode = 413;
                         errorCode = "REQUEST_BODY_TOO_LARGE";
@@ -348,7 +398,7 @@ namespace LibraryPos.QuickBooksBridge
                 try
                 {
                     string body = Encoding.UTF8.GetString(buffer.ToArray());
-                    values = new JavaScriptSerializer { MaxJsonLength = 16384 }
+                    values = new JavaScriptSerializer { MaxJsonLength = 65536 }
                         .Deserialize<Dictionary<string, object>>(body);
                     return values != null;
                 }

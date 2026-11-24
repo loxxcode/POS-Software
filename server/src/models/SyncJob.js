@@ -12,12 +12,12 @@ const syncJobSchema = new mongoose.Schema(
     },
     operationType: {
       type: String,
-      enum: ["createCustomer", "createSalesReceipt", "createInvoice", "createReceivePayment", "updateCustomer", "updateItem"],
+      enum: ["createCustomer", "createSalesReceipt", "createInvoice", "createReceivePayment", "updateCustomer", "updateItem", "adjustInventory"],
       default: "createSalesReceipt",
     },
     entityType: {
       type: String,
-      enum: ["sale", "customerPayment", "customer", "item"],
+      enum: ["sale", "customerPayment", "customer", "item", "inventoryAdjustment"],
       default: "sale",
     },
     entityId: {

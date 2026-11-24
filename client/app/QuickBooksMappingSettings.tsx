@@ -77,6 +77,8 @@ type PaymentMapping = {
 };
 type MappingConfig = {
   accountsReceivableAccountListId: string | null;
+  inventoryAdjustmentAccountListId: string | null;
+  defaultCustomerListId: string | null;
   taxRateMappings: TaxMapping[];
   paymentMethodMappings: PaymentMapping[];
 };
@@ -107,6 +109,8 @@ const methodLabels: Record<PaymentMapping["posPaymentMethod"], string> = {
 };
 const defaultConfig: MappingConfig = {
   accountsReceivableAccountListId: null,
+  inventoryAdjustmentAccountListId: null,
+  defaultCustomerListId: null,
   taxRateMappings: [],
   paymentMethodMappings: [],
 };
@@ -356,6 +360,16 @@ export default function QuickBooksMappingSettings() {
     () => catalogs?.accounts.filter(account => account.type === "atAccountsReceivable") || [],
     [catalogs]
   );
+  const adjustmentAccounts = useMemo(
+    () => catalogs?.accounts.filter(account =>
+      account.type === "atOtherIncome" ||
+      account.type === "atOtherExpense" ||
+      account.type === "atExpense" ||
+      account.type === "atCostOfGoodsSold" ||
+      account.type === "atOtherCurrentAsset"
+    ) || [],
+    [catalogs]
+  );
   const depositAccounts = useMemo(
     () => catalogs?.accounts.filter(account =>
       account.type === "atBank" || account.type === "atOtherCurrentAsset"
@@ -396,6 +410,8 @@ export default function QuickBooksMappingSettings() {
       .then(data => {
         if (active) setConfig({
           accountsReceivableAccountListId: data.accountsReceivableAccountListId,
+          inventoryAdjustmentAccountListId: data.inventoryAdjustmentAccountListId || null,
+          defaultCustomerListId: data.defaultCustomerListId || null,
           taxRateMappings: data.taxRateMappings || [],
           paymentMethodMappings: data.paymentMethodMappings || [],
         });
@@ -630,7 +646,7 @@ export default function QuickBooksMappingSettings() {
         body: JSON.stringify(config),
       });
       setConfig(data);
-      setConfigNotice("QuickBooks mappings saved. Transaction writes are still disabled.");
+      setConfigNotice("QuickBooks mappings saved. Paid sales can post as receipts; credit-sale invoices are posted automatically.");
     } catch (error) {
       setConfigError(error instanceof Error ? error.message : "Unable to save QuickBooks mappings.");
     } finally {
@@ -671,7 +687,7 @@ export default function QuickBooksMappingSettings() {
     <div className="admin-panel-heading qb-mapping-heading">
       <div>
         <h3>QuickBooks Desktop mapping setup</h3>
-        <p>Read-only catalog access and mapping configuration. No QuickBooks transactions are created or changed.</p>
+        <p>Browse QuickBooks lists, manage customer/item mappings, and configure inventory adjustments. Sales receipts, invoices, vendor bills, and payment posting are not connected yet.</p>
       </div>
       <button className="button button-outline" type="button" onClick={loadCatalogs} disabled={catalogLoading}>
         {catalogLoading ? "LOADING LISTS…" : catalogs ? "REFRESH QUICKBOOKS LISTS" : "LOAD QUICKBOOKS LISTS"}
@@ -679,10 +695,10 @@ export default function QuickBooksMappingSettings() {
     </div>
 
     {preferences?.multiCurrencyEnabled === false && <div className="qb-mapping-warning" role="status">
-      QuickBooks multi-currency is disabled. A home-currency reference was not returned; transaction sync must remain disabled until currency handling is confirmed.
+      QuickBooks multi-currency is disabled. A home-currency reference was not returned; sales, invoice, and payment posting remain disabled until currency handling is confirmed.
     </div>}
     {preferences?.multiCurrencyEnabled && !preferences.homeCurrencyReferenceAvailable && <div className="qb-mapping-warning" role="status">
-      QuickBooks did not return a home-currency reference. Transaction sync must remain disabled until currency handling is confirmed.
+      QuickBooks did not return a home-currency reference. Sales, invoice, and payment posting remain disabled until currency handling is confirmed.
     </div>}
     {preferences?.homeCurrencyReferenceAvailable && <div className="qb-mapping-status">
       QuickBooks home currency: <strong>{preferences.homeCurrencyCode} · {preferences.homeCurrencyName}</strong>
@@ -735,7 +751,7 @@ export default function QuickBooksMappingSettings() {
     <section className="qb-auto-match" aria-label="Match POS data with QuickBooks">
       <div className="qb-catalog-heading">
         <h4>Match POS data with QuickBooks</h4>
-        <p>Exact POS SKU or product-name matches are compared with QuickBooks inventory item names; customers match by exact name. Applying a preview links matches and updates QuickBooks names, item prices, and customer contact fields from POS. Ambiguous and unmatched records are left unchanged. Stock quantities and transactions are not synchronized.</p>
+        <p>Exact POS SKU or product-name matches are compared with QuickBooks inventory item names; customers match by exact name. Applying a preview links matches and updates QuickBooks names, item prices, and customer contact fields from POS. Ambiguous and unmatched records are left unchanged. Inventory quantity adjustments require the configured adjustment account; sales receipts, invoices, and payments are not posted.</p>
       </div>
       <div className="qb-auto-match-actions">
         <button
@@ -896,7 +912,7 @@ export default function QuickBooksMappingSettings() {
 
     <div className="qb-mapping-grid">
       <section className="qb-mapping-section">
-        <div className="admin-panel-heading"><div><h4>Product items</h4><p>Map POS products to QuickBooks inventory or assembly items so names and prices can sync safely. Stock quantities remain read-only.</p></div></div>
+        <div className="admin-panel-heading"><div><h4>Product items</h4><p>Map POS products to QuickBooks inventory or assembly items so names and prices can sync safely. Quantity changes use the configured Inventory Adjustment account.</p></div></div>
         <form className="qb-mapping-search" onSubmit={event => {
           event.preventDefault();
           loadProductPage(1, productSearchDraft);
@@ -975,7 +991,7 @@ export default function QuickBooksMappingSettings() {
     {mappingNotice && <p className="qb-mapping-success" role="status">{mappingNotice}</p>}
 
     <form className="qb-mapping-config" onSubmit={saveConfiguration}>
-      <div className="admin-panel-heading"><div><h4>Tax and payment mappings</h4><p>These are saved for future validation only; transaction writes remain disabled.</p></div></div>
+      <div className="admin-panel-heading"><div><h4>Tax and payment mappings</h4><p>Tax mappings are required for receipts and invoices. Paid Sales Receipts also require payment and deposit mappings; credit invoices use customer and receivables mappings.</p></div></div>
       {configError && <p className="login-error" role="alert">{configError}</p>}
       {configNotice && <p className="qb-mapping-success" role="status">{configNotice}</p>}
 
@@ -1059,7 +1075,19 @@ export default function QuickBooksMappingSettings() {
       </section>
 
       <section className="qb-ar-mapping">
-        <label><span>Accounts receivable account for future credit invoices</span><select disabled={!catalogs} value={config.accountsReceivableAccountListId || ""} onChange={event => setConfig(current => ({
+        <label><span>Default QuickBooks customer for walk-in sales</span><select disabled={!catalogs} value={config.defaultCustomerListId || ""} onChange={event => setConfig(current => ({
+          ...current,
+          defaultCustomerListId: event.target.value || null,
+        }))}>
+          <option value="">Not selected</option>
+          {config.defaultCustomerListId &&
+            !catalogs?.customers.some(customer => customer.listId === config.defaultCustomerListId) &&
+            <option value={config.defaultCustomerListId}>Unavailable customer · {config.defaultCustomerListId}</option>}
+          {catalogs?.customers.map(customer => <option value={customer.listId} key={customer.listId}>{optionLabel(customer)}</option>)}
+        </select></label>
+      </section>
+      <section className="qb-ar-mapping">
+        <label><span>Accounts receivable account for credit invoices</span><select disabled={!catalogs} value={config.accountsReceivableAccountListId || ""} onChange={event => setConfig(current => ({
           ...current,
           accountsReceivableAccountListId: event.target.value || null,
         }))}>
@@ -1068,6 +1096,18 @@ export default function QuickBooksMappingSettings() {
             !receivableAccounts.some(account => account.listId === config.accountsReceivableAccountListId) &&
             <option value={config.accountsReceivableAccountListId}>Unavailable account · {config.accountsReceivableAccountListId}</option>}
           {receivableAccounts.map(item => <option value={item.listId} key={item.listId}>{optionLabel(item)}</option>)}
+        </select></label>
+      </section>
+      <section className="qb-ar-mapping">
+        <label><span>Inventory adjustment account</span><select disabled={!catalogs} value={config.inventoryAdjustmentAccountListId || ""} onChange={event => setConfig(current => ({
+          ...current,
+          inventoryAdjustmentAccountListId: event.target.value || null,
+        }))}>
+          <option value="">Not selected</option>
+          {config.inventoryAdjustmentAccountListId &&
+            !adjustmentAccounts.some(account => account.listId === config.inventoryAdjustmentAccountListId) &&
+            <option value={config.inventoryAdjustmentAccountListId}>Unavailable account · {config.inventoryAdjustmentAccountListId}</option>}
+          {adjustmentAccounts.map(item => <option value={item.listId} key={item.listId}>{optionLabel(item)} · {item.type.replace(/^at/, "")}</option>)}
         </select></label>
       </section>
       <button className="button button-blue" type="submit" disabled={configLoading || configSaving || !catalogs}>

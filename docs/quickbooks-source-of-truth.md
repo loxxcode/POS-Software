@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document defines Stage 2 of the QuickBooks integration. It is a policy and field-mapping baseline only. It does not enable accounting transaction writes.
+This document defines the QuickBooks integration policy, field mappings, and the supported POS sales-posting workflow.
 
 ## Responsibilities
 
@@ -17,14 +17,14 @@ This document defines Stage 2 of the QuickBooks integration. It is a policy and 
 | Customer `name`, `email`, `phone`, `address` | QuickBooks when mapped; POS for unmapped customer drafts | Existing POS fields remain in the customer record | Mapped edits are POS-driven under the current mapping workflow; resync is QuickBooks-to-MongoDB when import is implemented | Snapshot mismatch blocks auto-linking. Otherwise explicit administrator review; no blind last-write-wins |
 | Customer `tin` | POS/MongoDB | Store POS-only TIN | No write to QuickBooks | POS wins |
 | Customer `credit` | POS/MongoDB until accounting receivable posting is reconciled | Store POS outstanding balance and sale allocations | QuickBooks balance is read-only reference | Reconcile against QuickBooks customer balance; differences require review |
-| Product `sku`, `barcode`, `isbn`, `author`, `category`, `origin`, `stockQty` | POS/MongoDB | Store POS-only catalog and stock state | Not written to QuickBooks | POS wins; inventory changes remain POS operational data |
+| Product `sku`, `barcode`, `isbn`, `author`, `category`, `origin`, `stockQty` | POS/MongoDB after initial import | Store POS-only catalog and stock state; a new QuickBooks inventory/assembly import initializes `stockQty` from QuickBooks on-hand; posted sales reduce QuickBooks on-hand through the receipt/invoice transaction | Manual stock adjustments use a separate inventory adjustment transaction | POS wins after import; re-import does not overwrite existing POS quantity |
 | Product `name`, `sellingPrice` | POS/MongoDB mapping workflow today; eventual accounting policy remains QuickBooks item record | Mirror QuickBooks item name and sales price with ListID/EditSequence | POS edit may update an already mapped QuickBooks item | Current implementation: mapped record changes require bridge success. External edits require reconciliation; conflict requires review |
 | Product `costPrice`, POS category/item type | POS/MongoDB | Store POS metadata | Not written unless a later approved mapping adds supported fields | POS wins |
 | Inventory movements | POS/MongoDB | Append-only movement and audit history | Inventory quantities are not written to QuickBooks in the current policy | Reconcile only through a separately approved accounting policy |
 | Accounts and tax/payment mappings | QuickBooks catalog values; POS mapping decisions | Cache ListIDs, mappings, and as-of timestamps | Catalog values are read-only; mappings are stored in POS settings | Catalog and mapping changes invalidate stale previews |
-| Sale | POS/MongoDB for local operation; QuickBooks for confirmed accounting transaction | Sale remains locally durable; QuickBooks status, TxnID, type, and sync timestamp are references | New accounting creation is deferred to the synchronization stage | Never invent a TxnID; timeout/outcome unknown requires lookup/reconciliation |
+| Sale | POS/MongoDB for local operation; QuickBooks for confirmed accounting transaction | Sale remains locally durable; QuickBooks status, TxnID, type, and sync timestamp are references | Paid sales post as Sales Receipts on explicit accountant/admin action; credit sales post as Invoices automatically | Stable reference lookup precedes add; timeout/outcome unknown requires lookup/reconciliation |
 | Customer payment | POS/MongoDB locally; QuickBooks after confirmed receive-payment creation | Store request ID, allocations, and accounting status | Later synchronization only | Stable request ID; query before uncertain retry |
-| Sales receipt/invoice/payment transaction | QuickBooks after confirmed creation | Store supported response identifiers and reconciliation status | QuickBooks write is one-way from a confirmed outbox job | Idempotent request key and TxnID query prevent duplicate transactions |
+| Sales receipt/invoice transaction | QuickBooks after confirmed creation | Store supported response identifiers and reconciliation status | Sales Receipts require explicit action; credit Invoices post automatically after sale commit | Stable reference lookup before retry; uncertain outcomes require review |
 | Accounting balances | QuickBooks | Optional cache with `asOf` timestamp and stale status | Read-only | QuickBooks wins; stale values must be labeled |
 | Proformas, discounts, users, roles, audit logs | POS/MongoDB | Existing models remain authoritative | Not posted unless a future approved workflow says otherwise | POS wins |
 
@@ -54,7 +54,7 @@ These fields are mirror metadata, not proof that the entire QuickBooks company f
 | POS name | `name` | QuickBooks item `Name`/`FullName` |
 | Sales price | `sellingPrice` | QuickBooks item sales price |
 | Cost price | `costPrice` | POS-only until a purchase-cost policy is approved |
-| Stock quantity | `stockQty` | POS operational quantity; QuickBooks `QuantityOnHand` is read-only cache |
+| Stock quantity | `stockQty` | POS operational quantity; QuickBooks `QuantityOnHand` initializes newly imported products; sold items are decremented by the posted receipt/invoice transaction |
 | Mapping | `quickBooksItemListId` | QuickBooks item `ListID` |
 
 Current model limitation: QuickBooks item type, income/expense/asset account references, and item-level tax configuration are not stored in the Product schema. They must be validated before transaction creation.
@@ -86,7 +86,7 @@ Current model limitation: QuickBooks item type, income/expense/asset account ref
 | Accounting identifier | `quickBooksTxnId` | Confirmed QuickBooks TxnID only |
 | Accounting kind | `quickBooksTxnType` | `SalesReceipt`, `Invoice`, or `ReceivePayment` |
 
-No sale or payment may be marked `synced` unless QuickBooks confirms the transaction identifier.
+No sale or payment may be marked `synced` unless QuickBooks confirms the transaction identifier. A receipt/invoice itself adjusts QuickBooks item quantity; do not also post an inventory adjustment for the same sold units.
 
 ## Mapping safety rules
 
@@ -96,7 +96,7 @@ No sale or payment may be marked `synced` unless QuickBooks confirms the transac
 4. Existing POS-only fields are preserved during QuickBooks imports.
 5. QuickBooks absence from one incomplete query is not treated as deletion.
 6. Deletion, inactive status, voiding, and missing records require separate reconciliation logic.
-7. POS stock adjustments change MongoDB stock only and must not modify QuickBooks inventory quantities.
+7. Imported QuickBooks products use a deterministic `QB-<ListID>` SKU and are available in POS checkout. Sales posted to QuickBooks reduce QuickBooks item quantity; manual stock changes use a separately configured inventory-adjustment account.
 8. Product creation and customer creation have different policies: POS product creation is not automatically QuickBooks item creation; mapped POS customers may create QuickBooks customers under the existing approved workflow.
 
 ## Conflict policy
@@ -109,4 +109,4 @@ No sale or payment may be marked `synced` unless QuickBooks confirms the transac
 
 ## Next-stage boundary
 
-Stage 3 may enable read-only company, preference, and catalog operations. Stage 4 may add mirror models and initial import. No Sales Receipt, Invoice, ReceivePayment, item creation, or accounting stock write is enabled until mapping, idempotency, reconciliation, and tests pass.
+The product-import flow creates POS records for active QuickBooks inventory and assembly items only; it does not create QuickBooks items. Sales receipt and invoice writes require verified company identity and completed customer, item, tax, payment/deposit, and receivable mappings. The bridge checks stable references before creating transactions. Do not duplicate sale quantities with a separate inventory adjustment, and reconcile unknown or total-mismatch results before retrying.

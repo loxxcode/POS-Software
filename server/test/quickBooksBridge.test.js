@@ -3,6 +3,7 @@ import http from "node:http";
 import test from "node:test";
 import {
   createQuickBooksCustomer,
+  createQuickBooksSalesTransaction,
   getQuickBooksBridgeCapabilities,
   getQuickBooksBridgeHealth,
   getQuickBooksCompany,
@@ -197,6 +198,12 @@ test("QuickBooks bridge client sends authenticated JSON master-data writes", asy
       address: "Main Street",
     });
     await updateQuickBooksItem("item-list-id", { name: "Reader", salesPrice: 125 });
+    await createQuickBooksSalesTransaction({
+      transactionType: "SalesReceipt",
+      customerListId: "customer-list-id",
+      refNumber: "P1234567890",
+      lines: [{ itemListId: "item-list-id", quantity: 1, amount: 125, taxCodeListId: "tax-code-id" }],
+    });
 
     assert.deepEqual(calls, [
       {
@@ -219,6 +226,18 @@ test("QuickBooks bridge client sends authenticated JSON master-data writes", asy
         token: secret,
         contentType: "application/json",
         body: { name: "Reader", salesPrice: 125 },
+      },
+      {
+        method: "POST",
+        path: "/quickbooks/sales",
+        token: secret,
+        contentType: "application/json",
+        body: {
+          transactionType: "SalesReceipt",
+          customerListId: "customer-list-id",
+          refNumber: "P1234567890",
+          lines: [{ itemListId: "item-list-id", quantity: 1, amount: 125, taxCodeListId: "tax-code-id" }],
+        },
       },
     ]);
   } finally {

@@ -70,7 +70,19 @@ const quickBooksSyncSettingsSchema = new mongoose.Schema(
       default: null,
       maxlength: 64,
     },
+    defaultCustomerListId: {
+      type: String,
+      trim: true,
+      default: null,
+      maxlength: 100,
+    },
     accountsReceivableAccountListId: {
+      type: String,
+      trim: true,
+      default: null,
+      maxlength: 100,
+    },
+    inventoryAdjustmentAccountListId: {
       type: String,
       trim: true,
       default: null,

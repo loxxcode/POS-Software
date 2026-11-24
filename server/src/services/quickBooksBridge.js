@@ -208,3 +208,21 @@ export async function updateQuickBooksItem(listId, item) {
   });
   return response.data;
 }
+
+export async function adjustQuickBooksInventory(adjustment) {
+  const response = await requestBridge("/quickbooks/inventory/adjust", {
+    method: "POST",
+    body: adjustment,
+    timeoutMs: 20000,
+  });
+  return response.data;
+}
+
+export async function createQuickBooksSalesTransaction(transaction) {
+  const response = await requestBridge("/quickbooks/sales", {
+    method: "POST",
+    body: transaction,
+    timeoutMs: 30000,
+  });
+  return response.data;
+}

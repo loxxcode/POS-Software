@@ -25,6 +25,10 @@ test("sync worker classifies timeout as unknown outcome", () => {
     SyncState.RETRYABLE_FAILED
   );
   assert.equal(
+    classifySyncFailure({ code: "BRIDGE_RESPONSE_INCOMPLETE", message: "incomplete" }),
+    SyncState.OUTCOME_UNKNOWN
+  );
+  assert.equal(
     classifySyncFailure({ code: "INVALID_MAPPING", message: "invalid" }),
     SyncState.PERMANENT_FAILED
   );

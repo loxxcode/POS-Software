@@ -29,6 +29,8 @@
     <Compile Include="QuickBooksCatalogsQuery.cs" />
     <Compile Include="QuickBooksPreferencesQuery.cs" />
     <Compile Include="QuickBooksMasterData.cs" />
+    <Compile Include="QuickBooksInventoryAdjustment.cs" />
+    <Compile Include="QuickBooksSalesTransaction.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

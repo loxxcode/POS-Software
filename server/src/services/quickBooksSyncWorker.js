@@ -14,9 +14,7 @@ export const SyncState = Object.freeze({
 });
 
 const retryCodes = new Set([
-  "BRIDGE_TIMEOUT",
   "BRIDGE_UNAVAILABLE",
-  "QUICKBOOKS_COM_ERROR",
   "SESSION_CLOSE_ERROR",
   "CONNECTION_CLOSE_ERROR",
 ]);
@@ -30,7 +28,9 @@ export function calculateRetryDelayMs(attempt, randomValue = Math.random()) {
 
 export function classifySyncFailure(error) {
   const code = typeof error?.code === "string" ? error.code : "UNKNOWN_SYNC_ERROR";
-  if (code === "BRIDGE_TIMEOUT") return SyncState.OUTCOME_UNKNOWN;
+  if (["BRIDGE_TIMEOUT", "BRIDGE_RESPONSE_INCOMPLETE", "BRIDGE_INVALID_RESPONSE", "QUICKBOOKS_COM_ERROR"].includes(code)) {
+    return SyncState.OUTCOME_UNKNOWN;
+  }
   if (retryCodes.has(code)) return SyncState.RETRYABLE_FAILED;
   return SyncState.PERMANENT_FAILED;
 }

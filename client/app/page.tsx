@@ -5,9 +5,10 @@ import { QRCodeSVG } from "qrcode.react";
 import CameraBarcodeScanner from "./CameraBarcodeScanner";
 import ProformaWorkspace from "./ProformaWorkspace";
 import QuickBooksMappingSettings from "./QuickBooksMappingSettings";
+import QuickBooksWorkspace from "./QuickBooksWorkspace";
 import { buildMtnMomoPaymentPayload } from "./payment";
 
-type Screen = "Dashboard" | "Inventory" | "Sales" | "Proformas" | "Discount" | "Customer" | "Request" | "Report" | "Users" | "Organizations" | "Transactions" | "Financial Overview" | "Audit Logs" | "Settings" | "Notifications" | "Profile" | "Chart of Accounts" | "Income" | "Expenses" | "Journal Entries" | "Invoices" | "Bank Reconciliation" | "Financial Statements" | "Transaction Review" | "Approvals" | "Budgets" | "Audit & Compliance" | "Cash Flow" | "Activity Logs";
+type Screen = "Dashboard" | "Inventory" | "Sales" | "Proformas" | "Discount" | "Customer" | "Request" | "Report" | "Users" | "Organizations" | "Transactions" | "Financial Overview" | "Audit Logs" | "Settings" | "QuickBooks" | "Notifications" | "Profile" | "Chart of Accounts" | "Income" | "Expenses" | "Journal Entries" | "Invoices" | "Bank Reconciliation" | "Financial Statements" | "Transaction Review" | "Approvals" | "Budgets" | "Audit & Compliance" | "Cash Flow" | "Activity Logs";
 type Role = "cashier" | "accountant" | "daf" | "administration";
 type UserSession = { role: Role; name: string; email: string };
 type StaffRole = Exclude<Role, "administration">;
@@ -42,8 +43,8 @@ type RequestApiDocument = { _id: string; createdAt: string; status: string; item
 type CustomerPayment = { id: string; createdAt: string; amount: number; paymentMethod: string; balanceBefore: number; balanceAfter: number; receivedBy: string };
 type CustomerPaymentApiDocument = { _id: string; createdAt: string; amount: number; paymentMethod: string; balanceBefore: number; balanceAfter: number; receivedBy: string };
 type SaleLineItem = { productId: string; sku: string; name: string; quantity: number; unitPrice: number; lineTotal: number; discountAmount?: number; taxRate?: number; taxAmount?: number };
-type Sale = { id: number; receiptNumber: string; proformaNumber: string | null; date: string; customer: string; customerPhone: string; paymentMethod: string; total: number; subtotal: number; discountTotal: number; taxTotal: number; amountPaid: number; paymentStatus: string; items: number; credit: number; lineItems: SaleLineItem[] };
-type SaleApiDocument = { _id: string; receiptNumber: string; proformaNumber?: string | null; createdAt: string; customerId?: string | null; customerName?: string; customerPhone?: string; paymentMethod: string; total: number; subtotal?: number; discountTotal?: number; taxTotal?: number; amountPaid?: number; balanceDue?: number; paymentStatus?: string; items: SaleLineItem[] };
+type Sale = { id: number; saleId: string; receiptNumber: string; proformaNumber: string | null; date: string; customer: string; customerPhone: string; paymentMethod: string; total: number; subtotal: number; discountTotal: number; taxTotal: number; amountPaid: number; paymentStatus: string; quickBooksStatus: "pending" | "processing" | "synced" | "failed" | "needs_review"; quickBooksTxnType: string | null; quickBooksLastError: string | null; items: number; credit: number; lineItems: SaleLineItem[] };
+type SaleApiDocument = { _id: string; receiptNumber: string; proformaNumber?: string | null; createdAt: string; customerId?: string | null; customerName?: string; customerPhone?: string; paymentMethod: string; total: number; subtotal?: number; discountTotal?: number; taxTotal?: number; amountPaid?: number; balanceDue?: number; paymentStatus?: string; quickBooksStatus?: Sale["quickBooksStatus"]; quickBooksTxnType?: string | null; quickBooksLastError?: string | null; items: SaleLineItem[] };
 type DashboardAction = (screen: Screen) => void;
 const defaultAdminSettings: AdminSettings = {
   shopName: "CARITAS HQ SHOP",
@@ -80,6 +81,7 @@ const adminNavItems: NavigationItem[] = [
   { label: "Transactions", screen: "Transactions", icon: "▧" },
   { label: "Proformas", screen: "Proformas", icon: "▢" },
   { label: "Reports", screen: "Report", icon: "▥" },
+  { label: "QuickBooks", screen: "QuickBooks", icon: "▣" },
   // { label: "Audit Logs", screen: "Audit Logs", icon: "▤" },
   { label: "Settings", screen: "Settings", icon: "⚙" },
   { label: "Notifications", screen: "Notifications", icon: "♢" },
@@ -151,6 +153,7 @@ const screenSubtitles: Record<Screen, string> = {
   "Financial Overview": "Review sales totals and recorded credit.",
   "Audit Logs": "Review administrative and operational activity.",
   Settings: "Manage application preferences and configuration.",
+  QuickBooks: "Connected QuickBooks Desktop workflows and setup.",
   Notifications: "Review stock and request alerts.",
   Profile: "Review your signed-in account details.",
   "Chart of Accounts": "Review the accounting categories and account codes.",
@@ -199,6 +202,15 @@ function toInventoryProduct(product: InventoryApiProduct): Product {
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+function isSaleApiDocument(value: unknown): value is SaleApiDocument {
+  return isRecord(value) &&
+    typeof value._id === "string" &&
+    typeof value.receiptNumber === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.paymentMethod === "string" &&
+    typeof value.total === "number" &&
+    Array.isArray(value.items);
 }
 function isQuickBooksInventoryData(value: unknown): value is QuickBooksInventoryData {
   return isRecord(value) &&
@@ -295,6 +307,7 @@ function toSale(document: SaleApiDocument): Sale {
   const createdAt = new Date(document.createdAt);
   return {
     id: createdAt.getTime(),
+    saleId: document._id,
     receiptNumber: document.receiptNumber,
     proformaNumber: document.proformaNumber || null,
     date: Number.isNaN(createdAt.getTime()) ? today() : createdAt.toISOString().slice(0, 10),
@@ -307,6 +320,9 @@ function toSale(document: SaleApiDocument): Sale {
     taxTotal: document.taxTotal || 0,
     amountPaid: document.amountPaid ?? document.total,
     paymentStatus: document.paymentStatus || "paid",
+    quickBooksStatus: document.quickBooksStatus || "pending",
+    quickBooksTxnType: document.quickBooksTxnType || null,
+    quickBooksLastError: document.quickBooksLastError || null,
     items: document.items.reduce((count, item) => count + item.quantity, 0),
     credit: document.balanceDue || 0,
     lineItems: document.items,
@@ -338,6 +354,7 @@ export default function Home() {
   const [quickBooksInventory, setQuickBooksInventory] = useState<QuickBooksInventoryData | null>(null);
   const [quickBooksInventoryLoading, setQuickBooksInventoryLoading] = useState(false);
   const [quickBooksInventoryError, setQuickBooksInventoryError] = useState("");
+  const [quickBooksProductImporting, setQuickBooksProductImporting] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [discounts, setDiscounts] = useState<Discount[]>([]);
   const [editingDiscountId, setEditingDiscountId] = useState<string | null>(null);
@@ -346,6 +363,7 @@ export default function Home() {
   const [salesRefreshKey, setSalesRefreshKey] = useState(0);
   const [salesLoading, setSalesLoading] = useState(false);
   const [saleSaving, setSaleSaving] = useState(false);
+  const [quickBooksSaleSyncing, setQuickBooksSaleSyncing] = useState<string | null>(null);
   const [businessSaving, setBusinessSaving] = useState(false);
   const [saleError, setSaleError] = useState("");
   const [paymentQrOpen, setPaymentQrOpen] = useState(false);
@@ -401,6 +419,48 @@ export default function Home() {
       setQuickBooksInventoryLoading(false);
     }
   }, []);
+
+  async function importQuickBooksProducts() {
+    setQuickBooksProductImporting(true);
+    setQuickBooksInventoryError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/sync/quickbooks/products/import`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const result: unknown = await response.json();
+      if (!isRecord(result)) throw new Error("The QuickBooks product import response was invalid.");
+      if (!response.ok) {
+        throw new Error(typeof result.message === "string" ? result.message : "Unable to import QuickBooks products.");
+      }
+      if (
+        !isRecord(result.data) ||
+        typeof result.data.imported !== "number" ||
+        !Number.isSafeInteger(result.data.imported) ||
+        typeof result.data.alreadyImported !== "number" ||
+        !Number.isSafeInteger(result.data.alreadyImported) ||
+        !isRecord(result.data.skipped)
+      ) {
+        throw new Error("The QuickBooks product import response was invalid.");
+      }
+      setProducts(await fetchInventoryProducts());
+      await refreshQuickBooksInventory();
+      const skipped = Object.values(result.data.skipped).reduce(
+        (total: number, count) => total + (typeof count === "number" ? count : 0),
+        0
+      );
+      setMessage(
+        `Imported ${result.data.imported} QuickBooks product${result.data.imported === 1 ? "" : "s"}; ` +
+        `${result.data.alreadyImported} already linked; ${skipped} unsupported item${skipped === 1 ? "" : "s"} skipped.`
+      );
+    } catch (error) {
+      setQuickBooksInventoryError(
+        error instanceof Error ? error.message : "Unable to import QuickBooks products."
+      );
+    } finally {
+      setQuickBooksProductImporting(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -1680,6 +1740,38 @@ export default function Home() {
     setPrintSale(sale);
   }
 
+  async function saveSaleToQuickBooks(sale: Sale) {
+    setQuickBooksSaleSyncing(sale.receiptNumber);
+    setMessage("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/sync/quickbooks/sales/${encodeURIComponent(sale.saleId)}/post`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const result: unknown = await response.json();
+      const data = isRecord(result) && isRecord(result.data) ? result.data : null;
+      const savedSale = data && isSaleApiDocument(data.sale) ? data.sale : null;
+      if (savedSale) {
+        const updated = toSale(savedSale);
+        setSales(current => current.map(item => item.saleId === updated.saleId ? updated : item));
+      }
+      if (!response.ok) {
+        throw new Error(isRecord(result) && typeof result.message === "string"
+          ? result.message
+          : "Unable to save the sale to QuickBooks.");
+      }
+      if (!savedSale) throw new Error("QuickBooks did not return the updated sale status.");
+      setMessage(isRecord(result) && typeof result.message === "string"
+        ? result.message
+        : "Sale saved to QuickBooks.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save the sale to QuickBooks.");
+    } finally {
+      setQuickBooksSaleSyncing(null);
+      setSalesRefreshKey(current => current + 1);
+    }
+  }
+
   function setField(key: string, value: string) {
     setForm(current => ({ ...current, [key]: value }));
   }
@@ -1817,7 +1909,6 @@ export default function Home() {
             products={products}
             customers={customers}
             discounts={discounts}
-            taxTreatment={adminSettings.taxTreatment}
             onConverted={() => setSalesRefreshKey(current => current + 1)}
             onInventoryRefresh={async () => setProducts(await fetchInventoryProducts())}
           />}
@@ -1891,12 +1982,19 @@ export default function Home() {
               <button className="button button-outline" disabled={quickBooksInventoryLoading} onClick={() => void refreshQuickBooksInventory()}>
                 {quickBooksInventoryLoading ? "LOADING QUICKBOOKS…" : "REFRESH QUICKBOOKS STOCK"}
               </button>
+              {session?.role === "administration" && <button
+                className="button button-blue"
+                disabled={quickBooksProductImporting || quickBooksInventoryLoading}
+                onClick={() => void importQuickBooksProducts()}
+              >
+                {quickBooksProductImporting ? "IMPORTING QUICKBOOKS ITEMS…" : "IMPORT QB PRODUCTS"}
+              </button>}
               <button className="button button-blue" onClick={() => openModal("product")}>＋ ADD</button>
             </div>
             {inventoryError && <p className="inventory-error" role="alert">{inventoryError}</p>}
             {quickBooksInventoryError && <p className="inventory-error" role="alert">{quickBooksInventoryError}</p>}
             <p className="hint">
-              QuickBooks on-hand values are read-only here. POS sales and stock adjustments continue to use the POS quantity.
+              Import adds only QuickBooks inventory and assembly items to the POS, using QB-&lt;ListID&gt; as the SKU when creating products. Re-imports preserve existing POS product details and stock. QuickBooks on-hand values remain read-only until an adjustment account is configured.
               {quickBooksInventory?.truncated ? " The QuickBooks item list is truncated at 1,000 items." : ""}
             </p>
             <p className="hint">Select a row to edit product details or adjust its stock.</p>
@@ -1931,7 +2029,7 @@ export default function Home() {
             <div className="table-footer"><span>Page 1 of 1</span><span>Item per page &nbsp; <select aria-label="Items per page"><option>20</option><option>50</option><option>100</option></select></span></div>
             <section className="quickbooks-inventory-catalog">
               <h3>QuickBooks Desktop item catalog</h3>
-              <p className="hint">Active QuickBooks items are listed below. Only mapped inventory items are editable from POS; all QuickBooks quantities remain read-only.</p>
+              <p className="hint">Active QuickBooks items are listed below. Import inventory and assembly items to make them available in POS checkout. Quantity changes are not yet sent to QuickBooks.</p>
               <Table headers={["QUICKBOOKS ITEM", "TYPE", "QB PRICE", "QB ON HAND", "POS PRODUCT"]}>
                 {quickBooksInventoryLoading && !quickBooksInventory && <tr><td colSpan={5}>Loading QuickBooks items…</td></tr>}
                 {!quickBooksInventoryLoading && quickBooksInventory?.items.length === 0 && <tr><td colSpan={5}>No QuickBooks items were returned.</td></tr>}
@@ -1958,9 +2056,28 @@ export default function Home() {
               }} />
               <button className="button button-rose" disabled={!selectedSale} onClick={() => setSelectedSaleReceipt(null)}>Clear selection</button>
               <button className="button button-muted" disabled={!selectedSale} onClick={() => selectedSale && printInvoice(selectedSale)}>Print selected</button>
+              {selectedSale && <span className={`qb-sale-status ${selectedSale.quickBooksStatus}`} role="status">
+                QuickBooks {selectedSale.quickBooksStatus.replaceAll("_", " ")}
+                {selectedSale.quickBooksTxnType ? ` · ${selectedSale.quickBooksTxnType}` : ""}
+              </span>}
+              {selectedSale &&
+                (session?.role === "administration" || session?.role === "accountant") &&
+                !["synced", "needs_review"].includes(selectedSale.quickBooksStatus) &&
+                <button
+                  className="button button-outline"
+                  disabled={quickBooksSaleSyncing === selectedSale.receiptNumber || selectedSale.quickBooksStatus === "processing"}
+                  onClick={() => void saveSaleToQuickBooks(selectedSale)}
+                >
+                  {quickBooksSaleSyncing === selectedSale.receiptNumber
+                    ? "Saving to QuickBooks…"
+                    : selectedSale.quickBooksStatus === "failed"
+                      ? "Retry QuickBooks sync"
+                      : "Save sale to QuickBooks"}
+                </button>}
               <button className="button button-muted" onClick={() => setScreen("Proformas")}>Proformas</button>
               <button className="button button-blue" onClick={() => openModal("sale")}>▣ &nbsp; SELL</button>
             </div>
+            {selectedSale?.quickBooksLastError && <p className="inventory-error" role="alert">{selectedSale.quickBooksLastError}</p>}
             <Table headers={["INVOICE", "CLIENT", "PHONE", "ITEMS", "PRICE PER ITEM", "TOTAL PRICE", "DATE", "TYPE", "PAYMENT", "OPERATOR", ""]}>
               {salesLoading && <tr><td colSpan={11}>Loading invoices…</td></tr>}
               {!salesLoading && visibleSales.length === 0 && <tr><td colSpan={11}>No invoices for this date.</td></tr>}
@@ -2190,6 +2307,9 @@ export default function Home() {
             error={settingsError}
             onChange={setSettingsDraft}
             onSave={saveAdminSettings}
+          />}
+          {screen === "QuickBooks" && session?.role === "administration" && <QuickBooksWorkspace
+            onNavigate={destination => setScreen(destination)}
           />}
           {screen === "Notifications" && session?.role === "administration" && <AdminNotifications
             lowStockProducts={lowStockProducts}

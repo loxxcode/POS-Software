@@ -232,7 +232,8 @@ export async function createProformaDraft(values, actor) {
           customerId: customer.customer,
           discountId: values.discountId,
           manualDiscountPercent: values.manualDiscountPercent ?? 0,
-          taxTreatment: settings.taxTreatment || "unconfigured",
+          taxTreatment: "unconfigured",
+          ignoreProductTaxRates: true,
           otherCharges: values.otherCharges || 0,
           session,
         });
@@ -289,7 +290,8 @@ export async function updateProformaDraft(id, values, actor, canEditAny = false)
         customerId: customer.customer,
         discountId: values.discountId,
         manualDiscountPercent: values.manualDiscountPercent ?? Number(proforma.manualDiscountPercent || 0),
-        taxTreatment: settings.taxTreatment || "unconfigured",
+        taxTreatment: "unconfigured",
+        ignoreProductTaxRates: true,
         otherCharges: values.otherCharges ?? Number(proforma.otherCharges.toString()),
         session,
       });
@@ -323,8 +325,9 @@ function pricingChanges(beforeItems, afterItems, oldTreatment, newTreatment) {
   const changes = afterItems.flatMap(item => {
     const old = oldItems.get(String(item.productId));
     if (!old) return [];
+    const taxesMatter = oldTreatment !== "unconfigured" || newTreatment !== "unconfigured";
     const changed = old.unitPrice.toString() !== item.unitPrice ||
-      old.taxRate !== item.taxRate ||
+      (taxesMatter && old.taxRate !== item.taxRate) ||
       old.discountPercent !== item.discountPercent;
     if (!changed) return [];
     return [{
@@ -366,15 +369,13 @@ export async function issueProforma(id, values, actor, canIssueAny = false) {
       if (proforma.status !== "draft") throw httpError(409, "Only drafts can be issued.");
       assertCanEdit(proforma, actor, canIssueAny);
       const settings = await getSettings(session);
-      if (!settings.taxTreatment || settings.taxTreatment === "unconfigured") {
-        throw httpError(409, "Tax treatment is not configured. Configure tax treatment and product tax rates before issuing.");
-      }
       const pricing = await priceProformaItems({
         items: proforma.items.map(item => ({ productId: item.productId, quantity: item.quantity })),
         customerId: proforma.customer,
         discountId: proforma.items.find(item => item.discountId)?.discountId,
         manualDiscountPercent: Number(proforma.manualDiscountPercent || 0),
-        taxTreatment: settings.taxTreatment,
+        taxTreatment: "unconfigured",
+        ignoreProductTaxRates: true,
         otherCharges: proforma.otherCharges.toString(),
         session,
       });
@@ -512,7 +513,8 @@ async function createNextRevision(proforma, actor, settings, session, action, va
     customerId: customer.customer,
     discountId: values.discountId ?? proforma.items.find(item => item.discountId)?.discountId,
     manualDiscountPercent: values.manualDiscountPercent ?? Number(proforma.manualDiscountPercent || 0),
-    taxTreatment: settings.taxTreatment || "unconfigured",
+    taxTreatment: "unconfigured",
+    ignoreProductTaxRates: true,
     otherCharges: values.otherCharges ?? proforma.otherCharges.toString(),
     session,
   });

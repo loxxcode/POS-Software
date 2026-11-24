@@ -24,6 +24,7 @@ test("sales and sync jobs retain separate QuickBooks synchronization metadata", 
   assert.ok(Sale.schema.path("quickBooksLastError"));
   assert.ok(Sale.schema.path("quickBooksSyncedAt"));
   assert.ok(Sale.schema.path("quickBooksRequestId"));
+  assert.ok(Sale.schema.path("taxTreatment"));
 
   assert.ok(Product.schema.path("quickBooksItemListId"));
   assert.ok(Customer.schema.path("quickBooksListId"));

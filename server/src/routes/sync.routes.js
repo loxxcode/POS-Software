@@ -3,6 +3,7 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import Customer from "../models/Customer.js";
 import Product from "../models/Product.js";
+import Sale from "../models/Sale.js";
 import QuickBooksSyncSettings from "../models/QuickBooksSyncSettings.js";
 import requireRole from "../middleware/requireRole.js";
 import SyncJob from "../models/SyncJob.js";
@@ -18,6 +19,8 @@ import {
 } from "../services/quickBooksBridge.js";
 import { buildQuickBooksAutoMatchPlan } from "../services/quickBooksAutoMatch.js";
 import { importQuickBooksCatalog } from "../services/quickBooksMirrorImport.js";
+import { importQuickBooksProducts } from "../services/quickBooksProductImport.js";
+import { syncSaleToQuickBooks } from "../services/quickBooksSaleSync.js";
 import QuickBooksImportCheckpoint from "../models/QuickBooksImportCheckpoint.js";
 import {
   reconcileSyncJob,
@@ -25,6 +28,16 @@ import {
 
 const router = Router();
 const paymentMethods = ["cash", "card", "mobile_money", "other"];
+
+function requireQuickBooksSalesRole(request, response, next) {
+  if (!["administration", "accountant"].includes(request.user?.role)) {
+    return response.status(403).json({
+      success: false,
+      message: "Only administration or accounting staff can post sales to QuickBooks.",
+    });
+  }
+  return next();
+}
 
 function bridgeRoute(operation) {
   return async (_request, response, next) => {
@@ -195,6 +208,102 @@ router.get("/quickbooks/company", requireRole("administration"), async (_request
 });
 router.get("/quickbooks/preferences", requireRole("administration"), bridgeRoute(getQuickBooksPreferences));
 router.get("/quickbooks/catalogs", requireRole("administration"), bridgeRoute(getQuickBooksCatalogs));
+
+router.post("/quickbooks/sales/:id/post", requireQuickBooksSalesRole, async (request, response, next) => {
+  if (!mongoose.isValidObjectId(request.params.id)) {
+    return response.status(400).json({ success: false, message: "Invalid sale ID." });
+  }
+  try {
+    const result = await syncSaleToQuickBooks(request.params.id);
+    return response.json({
+      success: true,
+      message: result.duplicate
+        ? "The matching QuickBooks transaction is already saved."
+        : "Sale saved to QuickBooks.",
+      data: result,
+    });
+  } catch (error) {
+    if (error.statusCode || error instanceof QuickBooksBridgeError) {
+      const currentSale = await Sale.findById(request.params.id).lean();
+      return response.status(error.statusCode || 502).json({
+        success: false,
+        code: error.code || "QUICKBOOKS_SALE_SYNC_FAILED",
+        message: error.message || "Unable to save the sale to QuickBooks.",
+        data: { sale: currentSale },
+      });
+    }
+    return next(error);
+  }
+});
+
+router.post("/quickbooks/products/import", requireRole("administration"), async (request, response, next) => {
+  try {
+    const [company, catalogs, settings] = await Promise.all([
+      getQuickBooksCompany(),
+      getQuickBooksCatalogs(),
+      getOrCreateQuickBooksSettings(),
+    ]);
+
+    if (!settings.expectedCompanyIdentityKey) {
+      return response.status(409).json({
+        success: false,
+        code: "QUICKBOOKS_COMPANY_NOT_VERIFIED",
+        message: "Verify and save the expected QuickBooks company identity before importing products.",
+      });
+    }
+
+    const mismatches = [];
+    if (company.companyIdentityKey !== settings.expectedCompanyIdentityKey) mismatches.push("companyIdentityKey");
+    if (settings.expectedCompanyName && company.companyName !== settings.expectedCompanyName) mismatches.push("companyName");
+    if (settings.expectedLegalCompanyName && company.legalCompanyName !== settings.expectedLegalCompanyName) mismatches.push("legalCompanyName");
+    if (settings.expectedCompanyCountry && company.country !== settings.expectedCompanyCountry) mismatches.push("country");
+    if (mismatches.length) {
+      return response.status(409).json({
+        success: false,
+        code: "QUICKBOOKS_COMPANY_MISMATCH",
+        message: "The open QuickBooks company does not match the configured POS company.",
+        mismatches,
+      });
+    }
+
+    if (catalogs.truncated?.items) {
+      return response.status(409).json({
+        success: false,
+        code: "QUICKBOOKS_ITEM_CATALOG_TRUNCATED",
+        message: "The QuickBooks item catalog is truncated. No products were imported.",
+      });
+    }
+    if (!Array.isArray(catalogs.items)) {
+      return response.status(502).json({
+        success: false,
+        code: "QUICKBOOKS_ITEM_CATALOG_INVALID",
+        message: "QuickBooks returned an invalid item catalog.",
+      });
+    }
+
+    const result = await importQuickBooksProducts({
+      items: catalogs.items,
+      performedBy: request.user.email,
+    });
+    return response.json({ success: true, data: result });
+  } catch (error) {
+    if (error instanceof QuickBooksBridgeError) {
+      return response.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
+    }
+    if (error.code === 11000) {
+      return response.status(409).json({
+        success: false,
+        code: "QUICKBOOKS_PRODUCT_IMPORT_CONFLICT",
+        message: "A generated QuickBooks SKU or item mapping is already in use. No products were imported; resolve the conflict and retry.",
+      });
+    }
+    return next(error);
+  }
+});
 
 router.post("/quickbooks/mirror/import", requireRole("administration"), async (_request, response, next) => {
   try {
@@ -557,6 +666,8 @@ router.get("/quickbooks/mappings/config", requireRole("administration"), async (
 router.patch("/quickbooks/mappings/config", requireRole("administration"), async (request, response, next) => {
   const {
     accountsReceivableAccountListId,
+    inventoryAdjustmentAccountListId,
+    defaultCustomerListId,
     taxRateMappings,
     paymentMethodMappings,
     expectedCompanyName,
@@ -566,6 +677,9 @@ router.patch("/quickbooks/mappings/config", requireRole("administration"), async
   } = request.body || {};
   if (
     !isValidListId(accountsReceivableAccountListId, true) ||
+    !isValidListId(inventoryAdjustmentAccountListId, true) ||
+    (typeof defaultCustomerListId !== "undefined" &&
+      !isValidListId(defaultCustomerListId, true)) ||
     !Array.isArray(taxRateMappings) ||
     taxRateMappings.length > 100 ||
     !Array.isArray(paymentMethodMappings) ||
@@ -641,6 +755,16 @@ router.patch("/quickbooks/mappings/config", requireRole("administration"), async
           accountsReceivableAccountListId: accountsReceivableAccountListId
             ? accountsReceivableAccountListId.trim()
             : null,
+          inventoryAdjustmentAccountListId: inventoryAdjustmentAccountListId
+            ? inventoryAdjustmentAccountListId.trim()
+            : null,
+          ...(typeof defaultCustomerListId === "undefined"
+            ? {}
+            : {
+                defaultCustomerListId: defaultCustomerListId
+                  ? defaultCustomerListId.trim()
+                  : null,
+              }),
           taxRateMappings: normalizedTaxMappings,
           paymentMethodMappings: normalizedPaymentMappings,
           ...(typeof expectedCompanyName === "string"

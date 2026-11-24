@@ -62,6 +62,11 @@ const saleSchema = new mongoose.Schema(
       amount: { type: Number, required: true, min: 0 },
     }],
     currency: { type: String, default: "RWF", enum: ["RWF"] },
+    taxTreatment: {
+      type: String,
+      enum: ["unconfigured", "exclusive", "inclusive"],
+      default: "unconfigured",
+    },
     paymentMethod: {
       type: String,
       enum: ["cash", "card", "mobile_money", "other", "credit"],

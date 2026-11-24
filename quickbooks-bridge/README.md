@@ -1,6 +1,6 @@
 # QuickBooks Desktop bridge
 
-The bridge runs beside QuickBooks Desktop and binds only to `127.0.0.1`. It supports authenticated company, preferences, and active-catalog queries, plus narrowly scoped customer and mapped inventory-item master-data writes. It has no financial transaction, inventory-quantity, or QuickBooks delete operation.
+The bridge runs beside QuickBooks Desktop and binds only to `127.0.0.1`. It supports authenticated company, preferences, and active-catalog queries, narrowly scoped customer and mapped inventory-item master-data writes, inventory adjustments, and mapped sales receipt/invoice creation. It does not expose QuickBooks delete operations.
 
 ## Requirements
 
@@ -39,11 +39,15 @@ QuickBooks informational status 1 responses that mean no matching object are tre
 
 ## Mapping and safety
 
-The backend exposes bridge status, preferences, catalogs, POS product/customer mappings, and tax/payment/account mappings. Catalogs are fetched only after an administrator chooses **Load QuickBooks lists**. Creating a POS customer also creates its QuickBooks customer; editing a mapped customer updates its name, email, phone, and billing address. Customer credit balances and TIN are not written. Editing a mapped QuickBooks inventory or assembly item updates its name and sales price only. New POS products are not created in QuickBooks, and QuickBooks stock-on-hand is displayed read-only; POS sales and stock adjustments continue to change only POS stock. POS customer deletion leaves the QuickBooks customer intact. Tax/payment selections are stored in the POS database and are not written to QuickBooks.
+The backend exposes bridge status, preferences, catalogs, POS product/customer mappings, and tax/payment/account mappings. Catalogs are fetched only after an administrator chooses **Load QuickBooks lists**. Creating a POS customer also creates its QuickBooks customer; editing a mapped customer updates its name, email, phone, and billing address. Customer credit balances and TIN are not written. Editing a mapped QuickBooks inventory or assembly item updates its name and sales price only. Administrators may import active QuickBooks inventory and assembly items into POS with a deterministic `QB-<ListID>` SKU; this creates POS products but does not create QuickBooks items. POS stock adjustments may post inventory-adjustment transactions when the adjustment account is configured.
+
+Paid sales are posted as QuickBooks Sales Receipts when an accountant or administrator uses **Save sale to QuickBooks** on the selected sale. Credit-sale invoices are posted automatically after the POS sale commits. Posting requires a verified company identity and mapped QuickBooks customer and items; configure the default QuickBooks customer for walk-in paid sales. Credit invoices require an individually mapped customer and accounts-receivable account, while receipts require a payment method and deposit account. Each tax rate needs a mapped QuickBooks sales-tax code; taxable lines also need a compatible sales-tax item. The application rejects mixed sales-tax items in one transaction. QuickBooks transaction lines reduce QuickBooks inventory, so the same sale is not also sent as an inventory adjustment.
+
+The bridge checks for a transaction with the stable POS reference number before adding it. A timeout or incomplete response is recorded as an unknown outcome and must be reconciled before another post. A saved transaction whose QuickBooks total differs from the POS total is held for review rather than silently marked synced. QuickBooks and MongoDB cannot be updated atomically; compare both systems after any failure.
 
 The mapping setup can preview exact matches between POS product SKU/name and QuickBooks inventory-item name/full name, and between customer names. The administrator must apply the preview to link records and synchronize POS product names/prices and customer names/contact details into QuickBooks. Ambiguous, conflicting, unmatched, or catalog-truncated records are not auto-linked. The preview is invalidated if relevant POS or QuickBooks data changes before apply. Records with no exact match are not created automatically.
 
-The current company reports multi-currency disabled and does not return a home-currency reference. Financial transaction synchronization must remain disabled; no invoices, sales receipts, payments, or inventory quantity changes are written to QuickBooks. Product price updates are limited to the confirmed RWF test company. Do not enable multi-currency or change company preferences as part of this setup.
+The current company reports multi-currency disabled and does not return a home-currency reference. Sales posting is restricted to the saved/verified company identity, and a multi-currency company is accepted only when its home currency is RWF. Before enabling posts in a live company, confirm the home currency, tax treatment, and all mappings with the accountant. Do not enable multi-currency or change company preferences as part of this setup.
 
 Before deploying the unique idempotency and mapping indexes, run the preflight without flags from the `server` directory:
 
@@ -57,7 +61,7 @@ Only if it reports no duplicates, create the indexes explicitly:
 node src\scripts\prepare-quickbooks-sync-index.js --create-index
 ```
 
-The preflight reports counts only and does not print stored keys or ListIDs. No live QuickBooks transaction test is supported by this bridge.
+The preflight reports counts only and does not print stored keys or ListIDs. Validate transaction posting first in a QuickBooks test company; the production posting path has not been live-tested as part of a build.
 
 ## Backup and recovery
 

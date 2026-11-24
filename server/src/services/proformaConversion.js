@@ -9,6 +9,7 @@ import Sale from "../models/Sale.js";
 import SyncJob from "../models/SyncJob.js";
 import { priceProformaItems } from "./proformaPricing.js";
 import { serializeProforma } from "./proformaWorkflow.js";
+import { syncSaleToQuickBooks } from "./quickBooksSaleSync.js";
 
 function httpError(status, message, details) {
   const error = new Error(message);
@@ -115,19 +116,36 @@ export async function convertProformaToSale(id, values, actor) {
         throw httpError(400, "Credit conversion requires a saved customer.");
       }
 
-      const settings = await AppSettings.findById("pos").session(session).lean();
-      if (!settings || settings.taxTreatment === "unconfigured") {
-        throw httpError(409, "Tax treatment is not configured for proforma conversion.");
+      const taxFreeProforma = proforma.taxTreatment === "unconfigured" &&
+        Number(proforma.taxTotal.toString()) === 0 &&
+        proforma.items.every(item => Number(item.taxAmount.toString()) === 0);
+      let currentPricing;
+      if (taxFreeProforma) {
+        currentPricing = await priceProformaItems({
+          items: proforma.items.map(item => ({ productId: item.productId, quantity: item.quantity })),
+          customerId: proforma.customer,
+          discountId: proforma.items.find(item => item.discountId)?.discountId,
+          manualDiscountPercent: Number(proforma.manualDiscountPercent || 0),
+          taxTreatment: "unconfigured",
+          ignoreProductTaxRates: true,
+          otherCharges: proforma.otherCharges.toString(),
+          session,
+        });
+      } else {
+        const settings = await AppSettings.findById("pos").session(session).lean();
+        if (!settings || settings.taxTreatment === "unconfigured") {
+          throw httpError(409, "Tax treatment is not configured for this existing proforma.");
+        }
+        currentPricing = await priceProformaItems({
+          items: proforma.items.map(item => ({ productId: item.productId, quantity: item.quantity })),
+          customerId: proforma.customer,
+          discountId: proforma.items.find(item => item.discountId)?.discountId,
+          manualDiscountPercent: Number(proforma.manualDiscountPercent || 0),
+          taxTreatment: settings.taxTreatment,
+          otherCharges: proforma.otherCharges.toString(),
+          session,
+        });
       }
-      const currentPricing = await priceProformaItems({
-        items: proforma.items.map(item => ({ productId: item.productId, quantity: item.quantity })),
-        customerId: proforma.customer,
-        discountId: proforma.items.find(item => item.discountId)?.discountId,
-        manualDiscountPercent: Number(proforma.manualDiscountPercent || 0),
-        taxTreatment: settings.taxTreatment,
-        otherCharges: proforma.otherCharges.toString(),
-        session,
-      });
       if (!itemValuesMatch(proforma, currentPricing)) {
         throw httpError(409, "Prices, discounts, or tax rules changed after acceptance. Revise and reissue the proforma for customer approval.");
       }
@@ -148,7 +166,7 @@ export async function convertProformaToSale(id, values, actor) {
             active: true,
             stockQty: { $gte: item.quantity },
             sellingPrice: unitPrice,
-            taxRate: item.taxRate,
+            ...(taxFreeProforma ? {} : { taxRate: item.taxRate }),
           },
           { $inc: { stockQty: -item.quantity } },
           { new: true, session }
@@ -165,7 +183,7 @@ export async function convertProformaToSale(id, values, actor) {
           unitPrice,
           lineTotal: gross,
           discountAmount: Number(item.discountAmount.toString()),
-          taxRate: item.taxRate,
+          taxRate: taxFreeProforma ? 0 : item.taxRate,
           taxAmount: Number(item.taxAmount.toString()),
         });
       }
@@ -206,6 +224,7 @@ export async function convertProformaToSale(id, values, actor) {
             : [],
           paymentMethod,
           currency: proforma.currency,
+          taxTreatment: taxFreeProforma ? "exclusive" : currentPricing.taxTreatment,
         }],
         { session }
       );
@@ -216,7 +235,7 @@ export async function convertProformaToSale(id, values, actor) {
         [{
           saleId: sale._id,
           internalJobId: randomUUID(),
-          operationType: "createSalesReceipt",
+          operationType: paymentMethod === "credit" ? "createInvoice" : "createSalesReceipt",
           entityType: "sale",
           entityId: sale._id,
           direction: "posToQuickBooks",
@@ -234,6 +253,16 @@ export async function convertProformaToSale(id, values, actor) {
       result = { sale, duplicate: false };
     });
     if (expired) throw httpError(409, "This proforma has expired.");
+    if (!result.duplicate && result.sale.paymentStatus === "unpaid") {
+      try {
+        await syncSaleToQuickBooks(result.sale._id);
+      } catch (error) {
+        result.quickBooksSyncError = error instanceof Error
+          ? error.message
+          : "QuickBooks invoice sync failed.";
+      }
+      result.sale = await Sale.findById(result.sale._id);
+    }
     return result;
   } catch (error) {
     if (error.code === 11000) {

@@ -79,7 +79,9 @@ export function createProformaPdf(proforma, settings) {
     };
     totalLine("Subtotal", proforma.subtotal);
     totalLine("Discounts", proforma.discountTotal);
-    totalLine(proforma.taxTreatment === "unconfigured" ? "Tax (not configured)" : "Tax", proforma.taxTotal);
+    if (Number(proforma.taxTotal?.toString() || 0) > 0) {
+      totalLine("Tax", proforma.taxTotal);
+    }
     totalLine("Other charges", proforma.otherCharges);
     totalLine("Total payable", proforma.grandTotal, true);
     document.moveDown();

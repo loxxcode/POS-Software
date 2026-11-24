@@ -184,6 +184,7 @@ router.get("/:id/pdf", requireProformaPermission("view"), async (request, respon
     const filename = `${proforma.proformaNumber}-r${proforma.revisionNumber}.pdf`;
     response.setHeader("Content-Type", "application/pdf");
     response.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    response.setHeader("Cache-Control", "no-store");
     return response.send(pdf);
   } catch (error) {
     if (response.headersSent) return next(error);

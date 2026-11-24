@@ -159,6 +159,10 @@ select:focus, input:focus { border-color: #7d98e5; box-shadow: 0 0 0 2px #e6ecff
 .sales-toolbar { min-height: 43px; margin-bottom: 3px; }
 .sales-toolbar .section-label { margin-right: auto; }
 .sales-toolbar input { width: 112px; }
+.qb-sale-status { padding: 6px 8px; border-radius: 4px; background: #eef1f6; color: #536077; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.qb-sale-status.synced { background: #e6f4eb; color: #237343; }
+.qb-sale-status.failed, .qb-sale-status.needs_review { background: #fff0e8; color: #a64c27; }
+.qb-sale-status.processing { background: #edf2ff; color: #365392; }
 .sales-summary { min-height: 41px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 8px; color: #656d7e; font-size: 10px; }
 .sales-summary strong { color: #34394a; font-size: 11px; }
 
@@ -561,6 +565,36 @@ select:focus, input:focus { border-color: #7d98e5; box-shadow: 0 0 0 2px #e6ecff
 .button-outline { border: 1px solid #d5dbea; color: #334364; background: #f8faff; }
 .button-outline:hover:not(:disabled) { border-color: #9eb1e8; color: #234cae; background: #eef3ff; }
 .button-outline:disabled { opacity: .5; }
+.qb-workspace-page { display: grid; gap: 14px; }
+.qb-connection-card { display: grid; grid-template-columns: minmax(0, 1fr) repeat(2, minmax(150px, .55fr)); align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid #dfe7f5; border-radius: 7px; background: #f8faff; }
+.qb-connection-main { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.qb-connection-main > div, .qb-connection-detail { min-width: 0; display: grid; gap: 4px; }
+.qb-connection-main strong, .qb-connection-detail strong { color: #30384a; font-size: 11px; }
+.qb-connection-main small, .qb-connection-detail span { color: #7d8594; font-size: 9px; overflow-wrap: anywhere; }
+.qb-connection-indicator { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: #9aa3b2; }
+.qb-connection-indicator.connected { background: #35a36f; box-shadow: 0 0 0 4px #e0f3e9; }
+.qb-connection-indicator.disconnected { background: #d54b4b; box-shadow: 0 0 0 4px #fae5e5; }
+.qb-workspace-error, .qb-workspace-warning { grid-column: 1 / -1; margin: 0; padding: 9px 11px; border-radius: 5px; font-size: 10px; line-height: 1.5; }
+.qb-workspace-error { border: 1px solid #f0caca; color: #8c3232; background: #fff3f3; }
+.qb-workspace-warning { border: 1px solid #f1d8a8; color: #795019; background: #fff8e9; }
+.qb-capability-panel, .qb-workflow-group { display: grid; gap: 10px; padding: 14px; border: 1px solid #e3e8f1; border-radius: 7px; background: #fff; }
+.qb-capability-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.qb-capability-list span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid #e7ebf2; border-radius: 16px; color: #7d8594; background: #fafbfc; font-size: 9px; }
+.qb-capability-list span.enabled { border-color: #cde9d9; color: #286d50; background: #f0faf4; }
+.qb-capability-list i { font-style: normal; font-weight: 700; }
+.qb-workflow-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 12px; }
+.qb-workflow-group > header h3 { margin: 0; color: #252b3c; font-size: 12px; }
+.qb-workflow-group > header p { margin: 4px 0 0; color: #818999; font-size: 9px; }
+.qb-workflow-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.qb-workflow-card { min-width: 0; display: grid; align-content: start; gap: 7px; padding: 10px; border: 1px solid #e8ebf1; border-radius: 6px; background: #fbfcfe; }
+.qb-workflow-card.partial { border-color: #e6d9bb; background: #fffdf7; }
+.qb-workflow-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 7px; }
+.qb-workflow-card-heading strong { color: #30384a; font-size: 10px; }
+.qb-workflow-card-heading > span { flex: 0 0 auto; padding: 3px 6px; border-radius: 10px; color: #687184; background: #eef0f4; font-size: 8px; }
+.qb-workflow-card.partial .qb-workflow-card-heading > span { color: #795019; background: #fff0cc; }
+.qb-workflow-card p { margin: 0; color: #7d8594; font-size: 9px; line-height: 1.45; }
+.qb-workflow-card .admin-text-action { justify-self: start; padding: 0; font-size: 9px; }
+.qb-workflow-unavailable { color: #969dab; font-size: 8px; }
 .qb-mapping-panel { display: grid; gap: 14px; }
 .qb-mapping-heading { align-items: center; }
 .qb-mapping-heading .button { flex: 0 0 auto; }
@@ -781,6 +815,9 @@ select:focus, input:focus { border-color: #7d98e5; box-shadow: 0 0 0 2px #e6ecff
   .admin-section-intro { align-items: flex-start; flex-direction: column; }
   .audit-filters { width: 100%; flex-direction: column; align-items: stretch; }
   .admin-settings-layout { grid-template-columns: 1fr; }
+  .qb-connection-card { grid-template-columns: 1fr 1fr; }
+  .qb-connection-main { grid-column: 1 / -1; }
+  .qb-workflow-groups { grid-template-columns: 1fr; }
   .qb-mapping-heading { align-items: flex-start; flex-direction: column; }
   .qb-reconcile-form { min-width: 0; grid-template-columns: 1fr; }
   .qb-mapping-grid { grid-template-columns: 1fr; }

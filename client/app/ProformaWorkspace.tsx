@@ -78,7 +78,6 @@ type ProformaWorkspaceProps = {
   products: Product[];
   customers: Customer[];
   discounts: Discount[];
-  taxTreatment: "unconfigured" | "exclusive" | "inclusive";
   onConverted: (sale: SaleApiDocument) => void;
   onInventoryRefresh: () => Promise<void>;
 };
@@ -162,7 +161,6 @@ export default function ProformaWorkspace({
   products,
   customers,
   discounts,
-  taxTreatment,
   onConverted,
   onInventoryRefresh,
 }: ProformaWorkspaceProps) {
@@ -491,9 +489,7 @@ export default function ProformaWorkspace({
     </div>
     <div className="proforma-notice" role="note">
       <strong>Proforma invoice — not a payment receipt</strong>
-      <span>{taxTreatment === "unconfigured"
-        ? "Tax treatment is not configured. Drafts can be prepared, but issuing is blocked until tax settings and product rates are configured."
-        : "Prices are recalculated and verified by the server when a proforma is issued."}</span>
+      <span>Proforma totals exclude tax and are preserved when converted to a sale.</span>
     </div>
     {notice && <p className="proforma-success" role="status">{notice}</p>}
     {error && <p className="proforma-error" role="alert">{error}</p>}
@@ -535,7 +531,7 @@ export default function ProformaWorkspace({
                 {document.status === "draft" && canManageOwn &&
                   <><button onClick={() => editDraft(document)} disabled={busy}>Edit</button>
                     {document.approvalStatus !== "pending" && (role === "cashier" || role === "administration") &&
-                      <button onClick={() => void issue(document)} disabled={busy || taxTreatment === "unconfigured"}>Issue</button>}</>}
+                      <button onClick={() => void issue(document)} disabled={busy}>Issue</button>}</>}
                 {document.status === "draft" && document.approvalStatus === "pending" &&
                   (role === "daf" || role === "administration") &&
                   <><button onClick={() => void postAction(document, "approve")} disabled={busy}>Approve</button>
@@ -577,7 +573,7 @@ export default function ProformaWorkspace({
       <form className="proforma-editor" onSubmit={event => void saveDraft(event)}>
         <header><div><span className="report-eyebrow">{form.id ? "EDIT DRAFT" : "NEW DOCUMENT"}</span><h2>{form.id ? "Edit proforma draft" : "Create proforma draft"}</h2></div>
           <button type="button" className="modal-close" aria-label="Close proforma editor" onClick={() => setForm(null)}>×</button></header>
-        <p>Drafts do not reserve stock. The server validates current prices, discounts, stock, and tax when issuing.</p>
+        <p>Drafts do not reserve stock. The server validates current prices, discounts, and stock when issuing.</p>
         <div className="proforma-editor-grid">
           <label className="field"><span>Saved customer (optional)</span><select value={form.customerId} onChange={event => {
             const customer = customers.find(item => item.id === event.target.value);
@@ -645,7 +641,7 @@ export default function ProformaWorkspace({
           <label className="field"><span>Payment terms</span><textarea maxLength={2000} value={form.terms} onChange={event => updateForm("terms", event.target.value)} placeholder="Payment due according to the agreed terms" /></label>
           <label className="field"><span>Notes</span><textarea maxLength={2000} value={form.notes} onChange={event => updateForm("notes", event.target.value)} /></label>
         </div>
-        <div className="proforma-estimate"><span>Estimated discount: {money(estimatedDiscount)} · Total before tax: {money(estimatedTotal)}. Server calculates final values.</span><strong>{money(estimatedTotal)}</strong></div>
+        <div className="proforma-estimate"><span>Estimated discount: {money(estimatedDiscount)} · Tax-free total: {money(estimatedTotal)}. Server calculates final values.</span><strong>{money(estimatedTotal)}</strong></div>
         {error && <p className="proforma-error" role="alert">{error}</p>}
         <footer><button type="button" className="button button-muted" onClick={() => setForm(null)}>Close</button>
           <button type="submit" className="button button-blue" disabled={busy || !form.items.length}>{busy ? "Saving…" : "Save draft"}</button></footer>

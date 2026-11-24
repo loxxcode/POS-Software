@@ -1,11 +1,15 @@
 
 import { Router } from "express";
 import mongoose from "mongoose";
+import { createHash, randomUUID } from "node:crypto";
 import Product from "../models/Product.js";
 import InventoryLog from "../models/InventoryLog.js";
+import SyncJob from "../models/SyncJob.js";
+import QuickBooksSyncSettings from "../models/QuickBooksSyncSettings.js";
 import {
   getQuickBooksCatalogs,
   QuickBooksBridgeError,
+  adjustQuickBooksInventory,
 } from "../services/quickBooksBridge.js";
 
 const router = Router();
@@ -16,7 +20,7 @@ router.get("/", async (req, res, next) => {
     const data = await Product.find({ active: true })
       .select("sku name barcode unit taxRate itemType category origin stockQty sellingPrice costPrice quickBooksItemListId")
       .sort({ name: 1 })
-      .limit(500)
+      .limit(2000)
       .lean();
 
     res.json({ success: true, count: data.length, data });
@@ -138,7 +142,66 @@ router.post("/adjust", async (req, res, next) => {
         stockAfter: after,
         logId: log._id,
       };
+
+      if (product.quickBooksItemListId) {
+        await SyncJob.create(
+          [{
+            internalJobId: randomUUID(),
+            operationType: "adjustInventory",
+            entityType: "inventoryAdjustment",
+            entityId: product._id,
+            direction: "posToQuickBooks",
+            payloadReference: `inventory-adjustment:${log._id}`,
+            requestHash: createHash("sha256").update(`inventory-adjustment:${log._id}`).digest("hex"),
+            idempotencyKey: `inventory-adjustment:${log._id}`,
+            status: "pending",
+          }],
+          { session }
+        );
+      }
     });
+
+    const adjustedProduct = await Product.findById(productId)
+      .select("quickBooksItemListId")
+      .lean();
+    const settings = await QuickBooksSyncSettings.findById("default").lean();
+    if (settings?.inventoryAdjustmentAccountListId && adjustedProduct?.quickBooksItemListId) {
+      try {
+        const accountingResult = await adjustQuickBooksInventory({
+          accountListId: settings.inventoryAdjustmentAccountListId,
+          itemListId: adjustedProduct.quickBooksItemListId,
+          quantityDifference: change,
+          refNumber: String(result.logId).slice(-11),
+          memo: `POS inventory adjustment ${reason}${note ? `: ${note}` : ""}`,
+        });
+        await SyncJob.findOneAndUpdate(
+          { idempotencyKey: `inventory-adjustment:${result.logId}` },
+          {
+            $set: {
+              status: "synced",
+              quickBooksTxnId: accountingResult.txnId,
+              processedAt: new Date(),
+              lastErrorCode: null,
+              lastError: null,
+            },
+          }
+        );
+        result.quickBooksTxnId = accountingResult.txnId;
+      } catch (error) {
+        await SyncJob.findOneAndUpdate(
+          { idempotencyKey: `inventory-adjustment:${result.logId}` },
+          {
+            $set: {
+              status: error instanceof QuickBooksBridgeError && error.code === "BRIDGE_TIMEOUT"
+                ? "outcome_unknown"
+                : "retryable_failed",
+              lastErrorCode: error?.code || "QUICKBOOKS_INVENTORY_SYNC_FAILED",
+              lastError: error?.message ? String(error.message).slice(0, 1000) : "QuickBooks inventory synchronization failed.",
+            },
+          }
+        );
+      }
+    }
 
     res.json({ success: true, data: result });
   } catch (error) {

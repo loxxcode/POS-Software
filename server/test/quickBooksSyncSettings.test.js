@@ -5,6 +5,7 @@ import QuickBooksSyncSettings from "../src/models/QuickBooksSyncSettings.js";
 test("QuickBooks mapping settings accept distinct tax rates and payment methods", async () => {
   const settings = new QuickBooksSyncSettings({
     accountsReceivableAccountListId: "ar-account",
+    defaultCustomerListId: "walk-in-customer",
     taxRateMappings: [
       {
         posTaxRate: 0,
@@ -32,6 +33,7 @@ test("QuickBooks mapping settings accept distinct tax rates and payment methods"
   });
 
   await assert.doesNotReject(settings.validate());
+  assert.equal(settings.defaultCustomerListId, "walk-in-customer");
 });
 
 test("QuickBooks mapping settings reject duplicate POS tax rates and payment methods", async () => {

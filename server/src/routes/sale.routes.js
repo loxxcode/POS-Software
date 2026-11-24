@@ -8,6 +8,7 @@ import Sale from "../models/Sale.js";
 import SyncJob from "../models/SyncJob.js";
 import AppSettings from "../models/AppSettings.js";
 import { priceProformaItems } from "../services/proformaPricing.js";
+import { syncSaleToQuickBooks } from "../services/quickBooksSaleSync.js";
 
 const router = Router();
 
@@ -98,7 +99,6 @@ router.post("/", async (req, res, next) => {
 
   try {
     let createdSale;
-
     await session.withTransaction(async () => {
       const customer = customerId
         ? await Customer.findById(customerId).session(session)
@@ -190,6 +190,7 @@ router.post("/", async (req, res, next) => {
             : [],
           paymentMethod,
           currency: "RWF",
+          taxTreatment: settings?.taxTreatment || "unconfigured",
         }],
         { session }
       );
@@ -201,7 +202,7 @@ router.post("/", async (req, res, next) => {
         [{
           saleId: sale._id,
           internalJobId: randomUUID(),
-          operationType: "createSalesReceipt",
+          operationType: saleType === "credit" ? "createInvoice" : "createSalesReceipt",
           entityType: "sale",
           entityId: sale._id,
           direction: "posToQuickBooks",
@@ -216,10 +217,24 @@ router.post("/", async (req, res, next) => {
       createdSale = sale;
     });
 
+    let quickBooksSyncError = null;
+    if (saleType === "credit") {
+      try {
+        await syncSaleToQuickBooks(createdSale._id);
+      } catch (error) {
+        quickBooksSyncError = error instanceof Error
+          ? error.message
+          : "QuickBooks invoice sync failed.";
+      }
+    }
+    createdSale = await Sale.findById(createdSale._id).lean();
+
     res.status(201).json({
       success: true,
       message: saleType === "credit"
-        ? "Credit sale recorded; customer balance updated and QuickBooks sync is pending"
+        ? createdSale.quickBooksStatus === "synced"
+          ? "Credit sale recorded and its QuickBooks invoice was saved."
+          : `Credit sale recorded; QuickBooks invoice sync needs attention${quickBooksSyncError ? `: ${quickBooksSyncError}` : "."}`
         : "Sale recorded; QuickBooks sync is pending",
       data: createdSale,
     });

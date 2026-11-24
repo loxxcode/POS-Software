@@ -24,6 +24,11 @@ A Next.js + TypeScript POS prototype. Inventory products, stock adjustments, and
 
 5. Open http://localhost:3000
 
+## Production deployment
+The production frontend build uses `https://pos-software-ov1i.onrender.com` as its API. In Vercel, set the project root to `client` and add `NEXT_PUBLIC_API_URL=https://pos-software-ov1i.onrender.com` for Production (and Preview if previews should use the hosted API), then redeploy after changing environment variables.
+
+On Render, set `FRONTEND_URL=https://pos-software-phi.vercel.app` and configure the required database and authentication environment variables. The API allows that frontend origin by default when `FRONTEND_URL` is unset. Production session cookies are Secure and SameSite=None so browsers can send them with credentialed requests between the Vercel and Render hosts.
+
 To test barcode scanning with a phone camera, open the POS from a trusted HTTPS address reachable by the phone and allow camera access. Mobile browsers block camera access from plain HTTP LAN addresses. USB/Bluetooth keyboard-style scanners can scan directly into the barcode field.
 
 Run the automated barcode-camera checks from the `client` directory with `npm test`. The tests simulate camera access and a decoded barcode; use **Test webcam / scan barcode** in the product form to check a real webcam.

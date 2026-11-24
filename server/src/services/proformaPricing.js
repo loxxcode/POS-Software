@@ -27,6 +27,7 @@ export async function priceProformaItems({
   discountId,
   manualDiscountPercent = 0,
   taxTreatment,
+  ignoreProductTaxRates = false,
   otherCharges = 0,
   date = new Date(),
   session,
@@ -112,9 +113,11 @@ export async function priceProformaItems({
     const discountBps = percentageToBasisPoints(discountPercent, "Discount percentage");
     const lineDiscountMinor = roundedRatio(grossMinor * discountBps, 10000n);
     const taxableMinor = grossMinor - lineDiscountMinor;
-    const taxRate = product.taxRate === undefined ? null : product.taxRate;
+    const taxRate = ignoreProductTaxRates
+      ? null
+      : product.taxRate === undefined ? null : product.taxRate;
 
-    if (taxTreatment !== "unconfigured" && taxRate === null) {
+    if (!ignoreProductTaxRates && taxTreatment !== "unconfigured" && taxRate === null) {
       throw Object.assign(
         new Error(`Tax rate is not configured for ${product.name}. Set a product tax rate before issuing this proforma.`),
         { status: 409 }
